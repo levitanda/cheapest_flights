@@ -142,7 +142,7 @@ def run_scan(
         if delivered:
             # Recorded only on success, so a Telegram outage doesn't silently
             # burn the alert — the next scan will retry it.
-            storage.record_alert(deal)
+            storage.record_alert(deal, url=booking_url)
             sent += 1
         else:
             report.errors.append(f"delivery failed for {deal.offer.route}")

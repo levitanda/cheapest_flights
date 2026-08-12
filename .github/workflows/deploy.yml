@@ -22,6 +22,38 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m pytest -q
 
+  site:
+    # Independent of the server deploy: the frontend is static and lives in
+    # S3, so a broken box must not stop the page from updating, and vice versa.
+    needs: test
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload site to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+          BUCKET: ${{ secrets.SITE_BUCKET }}
+          DIST_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUCKET:-}" ]; then
+            echo "::warning::SITE_BUCKET not set, skipping site deploy"
+            exit 0
+          fi
+          aws s3 cp site/index.html "s3://$BUCKET/index.html" \
+            --content-type "text/html; charset=utf-8" \
+            --cache-control "public, max-age=300"
+          # Only index.html — never data/deals.json, which the scanner owns.
+          if [ -n "${DIST_ID:-}" ]; then
+            aws cloudfront create-invalidation \
+              --distribution-id "$DIST_ID" --paths "/index.html" "/" >/dev/null
+            echo "CDN invalidated"
+          fi
+
   deploy:
     needs: test
     runs-on: ubuntu-latest

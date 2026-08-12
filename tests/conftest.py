@@ -32,6 +32,8 @@ def settings(tmp_path: Path) -> Settings:
         alert_improve_pct=0.15,
         max_alerts_per_scan=6,
         scan_interval_minutes=180,
+        site_bucket="",
+        site_data_key="data/deals.json",
         telegram_token="",
         telegram_chat_id="",
         pushover_token="",

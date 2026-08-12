@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Дешёвые рейсы из Израиля</title>
+<meta name="description" content="Мониторинг аномально дешёвых авиабилетов из Тель-Авива: статистически необычные цены и ошибочные тарифы.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>✈️</text></svg>">
+<style>
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #16181d;
+  --muted: #6b7280;
+  --line: #e4e7eb;
+  --accent: #1f6feb;
+  --good: #16a34a;
+  --great: #0284c7;
+  --exceptional: #7c3aed;
+  --error-fare: #dc2626;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --ink: #e8eaed;
+    --muted: #9aa3af;
+    --line: #262b34;
+    --accent: #58a6ff;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1000px; margin: 0 auto; padding: 24px 16px 64px; }
+
+header h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.02em; }
+header p { margin: 0; color: var(--muted); }
+.meta { margin-top: 10px; font-size: 13px; color: var(--muted); }
+
+.stats { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 22px 0; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow); }
+.stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.controls input, .controls select {
+  font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+}
+.controls input { flex: 1 1 200px; min-width: 0; }
+
+.deal {
+  display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; align-items: start;
+  background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--shadow);
+}
+.deal.good { border-left-color: var(--good); }
+.deal.great { border-left-color: var(--great); }
+.deal.exceptional { border-left-color: var(--exceptional); }
+.deal.error_fare { border-left-color: var(--error-fare); }
+
+.route { font-weight: 600; font-size: 16px; }
+.route .code { color: var(--muted); font-weight: 400; font-size: 13px; }
+.when { color: var(--muted); font-size: 14px; }
+.tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+.tag.tier { border-color: currentColor; }
+.tag.good { color: var(--good); } .tag.great { color: var(--great); }
+.tag.exceptional { color: var(--exceptional); } .tag.error_fare { color: var(--error-fare); }
+
+.price { text-align: right; white-space: nowrap; }
+.price .now { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.price .was { color: var(--muted); text-decoration: line-through; font-size: 13px; }
+.price .off { color: var(--error-fare); font-weight: 600; font-size: 13px; }
+.price a { display: inline-block; margin-top: 8px; font-size: 13px; color: var(--accent); text-decoration: none; }
+.price a:hover { text-decoration: underline; }
+
+.empty, .loading { text-align: center; color: var(--muted); padding: 48px 16px; }
+.error { background: var(--panel); border: 1px solid var(--error-fare); border-radius: 10px; padding: 16px; color: var(--ink); }
+
+h2 { font-size: 17px; margin: 32px 0 12px; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 14px; }
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: none; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+
+footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>✈️ Дешёвые рейсы из Израиля</h1>
+  <p>Аномально низкие цены и ошибочные тарифы, найденные автоматическим мониторингом.</p>
+  <div class="meta" id="meta">Загрузка…</div>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div class="controls">
+  <input id="q" type="search" placeholder="Поиск по городу или коду аэропорта…" autocomplete="off">
+  <select id="tier">
+    <option value="">Все уровни</option>
+    <option value="error_fare">Ошибочные тарифы</option>
+    <option value="exceptional">Исключительные</option>
+    <option value="great">Отличные</option>
+    <option value="good">Хорошие</option>
+  </select>
+  <select id="sort">
+    <option value="recent">Сначала новые</option>
+    <option value="discount">По размеру скидки</option>
+    <option value="price">По цене</option>
+  </select>
+</div>
+
+<div id="deals"><div class="loading">Загрузка…</div></div>
+
+<h2>Наблюдаемые маршруты</h2>
+<div class="scroll"><table id="routes"><tbody></tbody></table></div>
+
+<footer>
+  Цены находит <a href="https://github.com/levitanda/cheapest_flights">открытый мониторинг</a>
+  по данным Aviasales и обновляются несколько раз в день.
+  Тариф может измениться или исчезнуть до бронирования — всегда проверяйте цену на сайте авиакомпании.
+</footer>
+
+</div>
+
+<script>
+const DATA_URL = "data/deals.json";
+
+const TIERS = {
+  good:        "Хорошая цена",
+  great:       "Отличная цена",
+  exceptional: "Исключительная",
+  error_fare:  "Ошибочный тариф",
+};
+const SYMBOL = { usd: "$", eur: "€", ils: "₪", gbp: "£", rub: "₽" };
+const MONTHS = ["янв","фев","мар","апр","мая","июн","июл","авг","сен","окт","ноя","дек"];
+
+const money = (v, cur) => {
+  const n = Math.round(v).toLocaleString("ru-RU").replace(/,/g, " ");
+  return SYMBOL[cur] ? SYMBOL[cur] + n : n + " " + (cur || "").toUpperCase();
+};
+const shortDate = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d) ? null : d.getDate() + " " + MONTHS[d.getMonth()];
+};
+const ago = (iso) => {
+  const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
+  if (!isFinite(mins) || mins < 0) return "";
+  if (mins < 60) return mins + " мин назад";
+  const h = Math.floor(mins / 60);
+  if (h < 24) return h + " ч назад";
+  const d = Math.floor(h / 24);
+  return d + (d === 1 ? " день назад" : d < 5 ? " дня назад" : " дней назад");
+};
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;   // textContent, never innerHTML: the
+  return n;                                  // payload carries airline and city
+};                                           // strings we do not control.
+
+let DEALS = [];
+
+function renderStats(p) {
+  const s = p.stats || {};
+  const items = [
+    [s.alerts ?? 0, "находок"],
+    [s.routes ?? 0, "маршрутов"],
+    [(s.observations ?? 0).toLocaleString("ru-RU").replace(/,/g, " "), "наблюдений цен"],
+    [p.currency ? p.currency.toUpperCase() : "—", "валюта"],
+  ];
+  const box = document.getElementById("stats");
+  box.replaceChildren(...items.map(([v, label]) => {
+    const d = el("div", "stat");
+    d.append(el("b", null, String(v)), el("span", null, label));
+    return d;
+  }));
+}
+
+function dealNode(d) {
+  const node = el("div", "deal " + (d.tier || ""));
+
+  const left = el("div");
+  const route = el("div", "route");
+  route.append(
+    document.createTextNode((d.destination_name || d.destination) + " "),
+    el("span", "code", "(" + d.origin + " → " + d.destination + ")")
+  );
+  left.append(route);
+
+  const dep = shortDate(d.depart_date), ret = shortDate(d.return_date);
+  let when = "даты уточняются";
+  if (dep && ret) when = dep + " — " + ret;
+  else if (dep) when = dep + ", в одну сторону";
+  left.append(el("div", "when", when));
+
+  const tags = el("div", "tags");
+  if (d.tier) tags.append(el("span", "tag tier " + d.tier, TIERS[d.tier] || d.tier));
+  if (d.transfers === 0) tags.append(el("span", "tag", "без пересадок"));
+  else if (d.transfers > 0) tags.append(el("span", "tag", "пересадок: " + d.transfers));
+  if (d.airline) tags.append(el("span", "tag", d.airline));
+  if (d.basis === "heuristic") tags.append(el("span", "tag", "оценка без истории"));
+  if (d.sent_at) tags.append(el("span", "tag", ago(d.sent_at)));
+  left.append(tags);
+
+  const right = el("div", "price");
+  right.append(el("div", "now", money(d.price, d.currency)));
+  if (d.baseline > d.price) {
+    right.append(el("div", "was", money(d.baseline, d.currency)));
+    right.append(el("div", "off", "−" + Math.round(d.drop_pct * 100) + "%"));
+  }
+  if (d.url) {
+    const a = el("a", null, "Открыть →");
+    a.href = d.url;
+    a.target = "_blank";
+    a.rel = "noopener nofollow";
+    right.append(a);
+  }
+
+  node.append(left, right);
+  return node;
+}
+
+function apply() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const tier = document.getElementById("tier").value;
+  const sort = document.getElementById("sort").value;
+
+  let list = DEALS.filter((d) => {
+    if (tier && d.tier !== tier) return false;
+    if (!q) return true;
+    return [d.destination, d.destination_name, d.origin, d.origin_name, d.country]
+      .some((v) => (v || "").toLowerCase().includes(q));
+  });
+
+  if (sort === "discount") list.sort((a, b) => b.drop_pct - a.drop_pct);
+  else if (sort === "price") list.sort((a, b) => a.price - b.price);
+  else list.sort((a, b) => String(b.sent_at).localeCompare(String(a.sent_at)));
+
+  const box = document.getElementById("deals");
+  if (!list.length) {
+    box.replaceChildren(el("div", "empty",
+      DEALS.length ? "Ничего не найдено по этому фильтру."
+                   : "Пока ничего не найдено. Сервис копит историю цен — первые находки появятся здесь."));
+    return;
+  }
+  box.replaceChildren(...list.map(dealNode));
+}
+
+function renderRoutes(routes) {
+  const tbody = document.querySelector("#routes tbody");
+  if (!routes || !routes.length) {
+    const tr = el("tr");
+    const td = el("td", null, "Пока нет накопленных маршрутов.");
+    td.colSpan = 5;
+    tr.append(td);
+    tbody.replaceChildren(tr);
+    return;
+  }
+  const head = el("tr");
+  ["Направление", "Тип", "Наблюдений", "Минимум", "Средняя"].forEach((h, i) => {
+    const th = el("th", i >= 2 ? "num" : null, h);
+    head.append(th);
+  });
+  const rows = routes.map((r) => {
+    const tr = el("tr");
+    tr.append(
+      el("td", null, (r.destination_name || r.destination) + " (" + r.origin + "→" + r.destination + ")"),
+      el("td", null, r.trip_kind === "ow" ? "в одну сторону" : "туда-обратно"),
+      el("td", "num", String(r.observations)),
+      el("td", "num", money(r.cheapest, r.currency)),
+      el("td", "num", money(r.average, r.currency))
+    );
+    return tr;
+  });
+  tbody.replaceChildren(head, ...rows);
+}
+
+fetch(DATA_URL, { cache: "no-cache" })
+  .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then((p) => {
+    DEALS = p.deals || [];
+    renderStats(p);
+    renderRoutes(p.routes);
+    document.getElementById("meta").textContent =
+      "Обновлено " + ago(p.generated_at) + " · " + DEALS.length + " находок в базе";
+    apply();
+    ["q", "tier", "sort"].forEach((id) =>
+      document.getElementById(id).addEventListener("input", apply));
+  })
+  .catch((e) => {
+    document.getElementById("meta").textContent = "";
+    document.getElementById("deals").replaceChildren(
+      el("div", "error", "Не удалось загрузить данные (" + e.message +
+        "). Сервис мониторинга ещё не выгрузил первый отчёт."));
+  });
+</script>
+</body>
+</html>

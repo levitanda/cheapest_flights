@@ -16,6 +16,7 @@ from .models import TIER_EXCEPTIONAL, Deal, Offer
 from .notify import build_notifiers
 from .notify.console import ConsoleNotifier
 from .providers.travelpayouts import TravelpayoutsProvider
+from .publish import build_payload, publisher_from
 from .runner import run_scan
 from .storage import Storage
 
@@ -61,6 +62,15 @@ def cmd_scan(args: argparse.Namespace, settings: Settings) -> int:
     removed = storage.prune(settings.keep_history_days)
     if removed:
         logger.info("pruned %d observations older than %d days", removed, settings.keep_history_days)
+
+    # Refresh the public site even when nothing was alerted: the page also
+    # shows collected history, and a stale "generated_at" reads as a dead
+    # service.
+    if not args.dry_run:
+        publisher = publisher_from(settings)
+        if publisher:
+            publisher.publish(build_payload(storage, geo, settings.currency))
+
     storage.close()
     return 1 if report.errors and not report.offers_seen else 0
 
@@ -166,6 +176,35 @@ def cmd_stats(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_publish(args: argparse.Namespace, settings: Settings) -> int:
+    """Rebuild the site payload from the database and upload it."""
+    settings.ensure_dirs()
+    storage = Storage(settings.db_path)
+    geo = Geo(settings.cache_dir)
+    payload = build_payload(storage, geo, settings.currency)
+
+    if args.stdout:
+        import json
+
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        storage.close()
+        return 0
+
+    publisher = publisher_from(settings)
+    if publisher is None:
+        print("SITE_BUCKET не задан — публиковать некуда")
+        storage.close()
+        return 1
+
+    ok = publisher.publish(payload)
+    print(
+        f"{'✓' if ok else '✗'} {len(payload['deals'])} находок, "
+        f"{len(payload['routes'])} маршрутов → s3://{settings.site_bucket}/{settings.site_data_key}"
+    )
+    storage.close()
+    return 0 if ok else 1
+
+
 def cmd_test_notify(args: argparse.Namespace, settings: Settings) -> int:
     """Push one synthetic deal through every configured channel."""
     settings.ensure_dirs()
@@ -225,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     stats = sub.add_parser("stats", help="что накопилось в базе")
     stats.set_defaults(func=cmd_stats)
+
+    publish = sub.add_parser("publish", help="выгрузить данные для сайта в S3")
+    publish.add_argument("--stdout", action="store_true", help="напечатать JSON вместо загрузки")
+    publish.set_defaults(func=cmd_publish)
 
     test = sub.add_parser("test-notify", help="отправить тестовое уведомление")
     test.add_argument("--origin", default="TLV")

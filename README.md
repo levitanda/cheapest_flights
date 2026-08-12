@@ -207,6 +207,36 @@ docker run -d --name flight-radar \
 
 Том с `data/` обязателен — в нём лежит вся накопленная история цен.
 
+## Публичный сайт
+
+[isr-cheap-flight.dalev.click](https://isr-cheap-flight.dalev.click) — статическая
+страница со всеми находками: фильтр по городу, сортировка по скидке и цене,
+таблица наблюдаемых маршрутов.
+
+Данные туда попадают не через API, а файлом: после каждого скана сервис
+выгружает `data/deals.json` в S3, а страница его читает. Поэтому у сайта нет
+ни бэкенда, ни открытого порта к базе с историей цен — только приватный бакет
+за CloudFront с доступом по OAC.
+
+```
+scan → SQLite (на сервере) → data/deals.json → S3 ─┐
+                                                    ├─ CloudFront ─ isr-cheap-flight.dalev.click
+              site/index.html (из GitHub Actions) ──┘
+```
+
+Ресурсы в AWS: бакет `isr-cheap-flight-site-654654296346` (приватный),
+дистрибуция `EWANFAR53TRLY`, сертификат ACM в us-east-1, ALIAS-записи A/AAAA в
+зоне `dalev.click`. Два узких IAM-пользователя вместо общего ключа:
+`flight-radar-publisher` (только `PutObject` в `data/*`, лежит на сервере) и
+`flight-radar-site-deployer` (выкладка `index.html` из CI).
+
+Локально страницу можно посмотреть так:
+
+```bash
+python -m flight_radar publish --stdout > site/data/deals.json
+python -m http.server -d site 8000
+```
+
 ## Ограничения, о которых стоит знать честно
 
 - API отдаёт цены, найденные пользователями Aviasales за последние 48 часов.

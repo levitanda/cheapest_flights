@@ -52,7 +52,12 @@ CREATE TABLE IF NOT EXISTS alerts (
     z_score       REAL NOT NULL,
     tier          TEXT NOT NULL,
     basis         TEXT NOT NULL,
-    sent_at       TEXT NOT NULL
+    sent_at       TEXT NOT NULL,
+    depart_date   TEXT,
+    return_date   TEXT,
+    airline       TEXT,
+    transfers     INTEGER,
+    url           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alert_route
     ON alerts (origin, destination, trip_kind, depart_month, sent_at);
@@ -83,7 +88,25 @@ class Storage:
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns that CREATE TABLE IF NOT EXISTS cannot add retroactively.
+
+        A database created before these columns existed keeps its old shape
+        forever otherwise, and the insert would fail against it.
+        """
+        existing = {r["name"] for r in self._conn.execute("PRAGMA table_info(alerts)")}
+        for column, ddl in (
+            ("depart_date", "TEXT"),
+            ("return_date", "TEXT"),
+            ("airline", "TEXT"),
+            ("transfers", "INTEGER"),
+            ("url", "TEXT"),
+        ):
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE alerts ADD COLUMN {column} {ddl}")
 
     def close(self) -> None:
         self._conn.close()
@@ -129,13 +152,14 @@ class Storage:
         self._conn.commit()
         return len(rows)
 
-    def record_alert(self, deal: Deal) -> None:
+    def record_alert(self, deal: Deal, url: Optional[str] = None) -> None:
         o = deal.offer
         self._conn.execute(
             """INSERT OR IGNORE INTO alerts
                (fingerprint, origin, destination, trip_kind, depart_month,
-                price, currency, baseline, drop_pct, z_score, tier, basis, sent_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                price, currency, baseline, drop_pct, z_score, tier, basis,
+                sent_at, depart_date, return_date, airline, transfers, url)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 deal.fingerprint,
                 o.origin,
@@ -150,6 +174,11 @@ class Storage:
                 deal.tier,
                 deal.basis,
                 datetime.now(timezone.utc).isoformat(),
+                _iso(o.depart_date),
+                _iso(o.return_date),
+                o.airline,
+                o.transfers,
+                url,
             ),
         )
         self._conn.commit()

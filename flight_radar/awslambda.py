@@ -69,7 +69,7 @@ def handler(event, context):  # noqa: ARG001 - Lambda signature
         logger.info("pruned %d stale observations", removed)
 
     publisher = publisher_from(settings)
-    published = bool(publisher and publisher.publish(build_payload(storage, geo, settings.currency)))
+    published = bool(publisher and publisher.publish(build_payload(storage, geo, settings.currency, marker=settings.tp_marker)))
 
     storage.close()
     if state:

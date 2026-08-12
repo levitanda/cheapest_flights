@@ -24,8 +24,9 @@ class TestPayload:
     def test_empty_database_still_produces_a_valid_document(self, storage, geo):
         payload = build_payload(storage, geo)
 
-        assert payload["schema"] == 1
+        assert payload["schema"] == 2
         assert payload["deals"] == []
+        assert payload["current"] == []
         assert payload["routes"] == []
         assert payload["stats"]["alerts"] == 0
         assert payload["generated_at"].endswith("+00:00")

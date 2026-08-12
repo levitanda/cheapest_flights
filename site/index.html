@@ -83,6 +83,19 @@ header p { margin: 0; color: var(--muted); }
 .price a { display: inline-block; margin-top: 8px; font-size: 13px; color: var(--accent); text-decoration: none; }
 .price a:hover { text-decoration: underline; }
 
+.hint { color: var(--muted); font-size: 13px; margin: -6px 0 12px; }
+.grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.fare {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; box-shadow: var(--shadow); display: flex;
+  flex-direction: column; gap: 2px; text-decoration: none; color: inherit;
+}
+.fare:hover { border-color: var(--accent); }
+.fare .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.fare .city { font-weight: 600; }
+.fare .amount { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fare .sub { color: var(--muted); font-size: 13px; }
+
 .empty, .loading { text-align: center; color: var(--muted); padding: 48px 16px; }
 .error { background: var(--panel); border: 1px solid var(--error-fare); border-radius: 10px; padding: 16px; color: var(--ink); }
 
@@ -128,6 +141,11 @@ footer a { color: var(--accent); }
 </div>
 
 <div id="deals"><div class="loading">Загрузка…</div></div>
+
+<h2 id="current-head">Самые дешёвые сейчас</h2>
+<p class="hint">Лучшая найденная цена по каждому направлению за последние трое суток.
+   Это не обязательно скидка — просто то, что дешевле всего прямо сейчас.</p>
+<div id="current" class="grid"></div>
 
 <h2>Наблюдаемые маршруты</h2>
 <div class="scroll"><table id="routes"><tbody></tbody></table></div>
@@ -192,6 +210,10 @@ function fillSuggestions(payload) {
     add(d.destination, d.destination_name);
     add(d.origin, d.origin_name);
   });
+  (payload.current || []).forEach((f) => {
+    add(f.destination, f.destination_name);
+    add(f.origin, f.origin);
+  });
   (payload.routes || []).forEach((r) => {
     add(r.destination, r.destination_name);
     add(r.origin, r.origin);
@@ -210,9 +232,9 @@ function renderStats(p) {
   const s = p.stats || {};
   const items = [
     [s.alerts ?? 0, "находок"],
-    [s.routes ?? 0, "маршрутов"],
+    [(p.current || []).length, "направлений с ценами"],
+    [s.routes ?? 0, "маршрутов в истории"],
     [(s.observations ?? 0).toLocaleString("ru-RU").replace(/,/g, " "), "наблюдений цен"],
-    [p.currency ? p.currency.toUpperCase() : "—", "валюта"],
   ];
   const box = document.getElementById("stats");
   box.replaceChildren(...items.map(([v, label]) => {
@@ -291,10 +313,59 @@ function apply() {
   if (!list.length) {
     box.replaceChildren(el("div", "empty",
       DEALS.length ? "Ничего не найдено по этому фильтру."
-                   : "Пока ничего не найдено. Сервис копит историю цен — первые находки появятся здесь."));
+                   : "Аномально низких цен пока нет. Детектору нужна история "
+                     + "за несколько дней, чтобы отличить скидку от обычной цены — "
+                     + "а пока смотрите текущие лучшие цены ниже."));
+  } else {
+    box.replaceChildren(...list.map(dealNode));
+  }
+  renderCurrent();
+}
+
+let CURRENT = [];
+
+function fareNode(f) {
+  // An <a> rather than a div with a handler: middle-click and "open in new
+  // tab" have to work, this is a list of links.
+  const node = el(f.url ? "a" : "div", "fare");
+  if (f.url) { node.href = f.url; node.target = "_blank"; node.rel = "noopener nofollow"; }
+
+  const top = el("div", "top");
+  top.append(el("span", "city", f.destination_name || f.destination),
+             el("span", "amount", money(f.price, f.currency)));
+  node.append(top);
+
+  const dep = shortDate(f.depart_date), ret = shortDate(f.return_date);
+  node.append(el("div", "sub", dep && ret ? dep + " — " + ret
+                             : dep ? dep + ", в одну сторону" : "даты уточняются"));
+
+  const bits = [f.origin + " → " + f.destination];
+  if (f.transfers === 0) bits.push("без пересадок");
+  else if (f.transfers > 0) bits.push("пересадок: " + f.transfers);
+  if (f.airline) bits.push(f.airline);
+  node.append(el("div", "sub", bits.join(" · ")));
+  return node;
+}
+
+function renderCurrent() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const tokens = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const box = document.getElementById("current");
+
+  const list = CURRENT.filter((f) => {
+    if (!tokens.length) return true;
+    const hay = [f.destination, f.destination_name, f.origin, f.country]
+      .filter(Boolean).join(" ").toLowerCase();
+    return tokens.every((t) => hay.includes(t));
+  });
+
+  if (!list.length) {
+    box.replaceChildren(el("div", "empty",
+      CURRENT.length ? "Ничего не найдено по этому фильтру."
+                     : "Сканер ещё не собрал ни одной цены."));
     return;
   }
-  box.replaceChildren(...list.map(dealNode));
+  box.replaceChildren(...list.map(fareNode));
 }
 
 function renderRoutes(routes) {
@@ -330,11 +401,13 @@ fetch(DATA_URL, { cache: "no-cache" })
   .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
   .then((p) => {
     DEALS = p.deals || [];
+    CURRENT = p.current || [];
     renderStats(p);
     renderRoutes(p.routes);
     fillSuggestions(p);
     document.getElementById("meta").textContent =
-      "Обновлено " + ago(p.generated_at) + " · " + DEALS.length + " находок в базе";
+      "Обновлено " + ago(p.generated_at) + " · " + DEALS.length + " находок, "
+      + CURRENT.length + " направлений с ценами";
     apply();
     ["q", "tier", "sort"].forEach((id) =>
       document.getElementById(id).addEventListener("input", apply));

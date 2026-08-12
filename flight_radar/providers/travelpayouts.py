@@ -225,29 +225,51 @@ class TravelpayoutsProvider:
         )
 
     def booking_url(self, offer: Offer) -> str:
-        """Prefer the API's own deep link; fall back to a search URL.
+        return booking_url(
+            offer.origin,
+            offer.destination,
+            offer.depart_date,
+            offer.return_date,
+            offer.deep_link,
+            self.marker,
+        )
 
-        `link` is a site-relative path that already encodes the exact
-        itinerary, so it drops the user straight onto the fare. When it is
-        missing we rebuild the standard Aviasales search path, which is
-        `ORIGIN DDMM DEST [DDMM] PAX`.
-        """
-        link = offer.deep_link or ""
-        if link.startswith("http"):
-            return self._with_marker(link)
-        if link.startswith("/"):
-            return self._with_marker(f"{_SEARCH_HOST}{link}")
 
-        path = offer.origin
-        if offer.depart_date:
-            path += offer.depart_date.strftime("%d%m")
-        path += offer.destination
-        if offer.return_date:
-            path += offer.return_date.strftime("%d%m")
-        return self._with_marker(f"{_SEARCH_HOST}/search/{path}1")
+def booking_url(
+    origin: str,
+    destination: str,
+    depart_date: Optional[date] = None,
+    return_date: Optional[date] = None,
+    deep_link: Optional[str] = None,
+    marker: str = "",
+) -> str:
+    """Prefer the API's own deep link; fall back to a search URL.
 
-    def _with_marker(self, url: str) -> str:
-        if not self.marker:
-            return url
-        separator = "&" if "?" in url else "?"
-        return f"{url}{separator}marker={self.marker}"
+    `link` is a site-relative path that already encodes the exact itinerary,
+    so it drops the user straight onto the fare. When it is missing we rebuild
+    the standard Aviasales search path, which is `ORIGIN DDMM DEST [DDMM] PAX`.
+
+    Module-level rather than a method because the site exporter needs the same
+    URL for rows read back out of the database, where no provider instance is
+    in play.
+    """
+    link = deep_link or ""
+    if link.startswith("http"):
+        return _with_marker(link, marker)
+    if link.startswith("/"):
+        return _with_marker(f"{_SEARCH_HOST}{link}", marker)
+
+    path = origin.upper()
+    if depart_date:
+        path += depart_date.strftime("%d%m")
+    path += destination.upper()
+    if return_date:
+        path += return_date.strftime("%d%m")
+    return _with_marker(f"{_SEARCH_HOST}/search/{path}1", marker)
+
+
+def _with_marker(url: str, marker: str) -> str:
+    if not marker:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}marker={marker}"

@@ -86,10 +86,21 @@ class TestGeo:
         geo.load()
         assert geo.coords("TLV") is None
 
+    def test_cache_filenames_carry_the_language(self, tmp_path):
+        """Otherwise switching language keeps serving the stale dump forever,
+        because the cache is keyed by filename alone."""
+        payload = [{"code": "TLV", "name": "Тель-Авив",
+                    "coordinates": {"lat": 32.0, "lon": 34.9}, "country_code": "IL"}]
+        cache = tmp_path / "cache"
+        Geo(cache, fetch=lambda url: payload, lang="ru").load()
+
+        assert (cache / "cities.ru.json").exists()
+        assert (cache / "airports.ru.json").exists()
+
     def test_corrupt_cache_is_refetched(self, tmp_path):
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
-        (cache_dir / "airports.json").write_text("{not json", encoding="utf-8")
+        (cache_dir / "airports.ru.json").write_text("{not json", encoding="utf-8")
 
         payload = [
             {
@@ -102,7 +113,35 @@ class TestGeo:
         geo = Geo(cache_dir, fetch=lambda url: payload if "airports" in url else [])
         geo.load()
         assert geo.coords("TLV") == (32.0, 34.9)
-        assert json.loads((cache_dir / "airports.json").read_text())
+        assert json.loads((cache_dir / "airports.ru.json").read_text())
+
+    def test_city_name_wins_over_the_airport_name(self, tmp_path):
+        """'Афины' belongs on the page, not 'Eleftherios Venizelos
+        International Airport' — but the airport's coordinates are the precise
+        ones and must still be used for distance."""
+        cities = [{"code": "ATH", "name": "Athens",
+                   "coordinates": {"lat": 37.98, "lon": 23.73},
+                   "country_code": "GR", "name_translations": {"ru": "Афины"}}]
+        airports = [{"code": "ATH", "name": "Eleftherios Venizelos International Airport",
+                     "coordinates": {"lat": 37.9364, "lon": 23.9445},
+                     "country_code": "GR"}]
+
+        geo = Geo(tmp_path / "c",
+                  fetch=lambda url: airports if "airports" in url else cities)
+        geo.load()
+
+        assert geo.name("ATH") == "Афины"
+        assert geo.coords("ATH") == (37.9364, 23.9445)
+
+    def test_airport_only_codes_still_resolve(self, tmp_path):
+        airports = [{"code": "XXX", "name": "Somewhere Field",
+                     "coordinates": {"lat": 1.0, "lon": 2.0}, "country_code": "ZZ"}]
+        geo = Geo(tmp_path / "c",
+                  fetch=lambda url: airports if "airports" in url else [])
+        geo.load()
+
+        assert geo.name("XXX") == "Somewhere Field"
+        assert geo.country("XXX") == "ZZ"
 
     def test_entries_without_coordinates_are_skipped(self, tmp_path):
         payload = [

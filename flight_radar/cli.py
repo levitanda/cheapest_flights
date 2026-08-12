@@ -69,7 +69,8 @@ def cmd_scan(args: argparse.Namespace, settings: Settings) -> int:
     if not args.dry_run:
         publisher = publisher_from(settings)
         if publisher:
-            publisher.publish(build_payload(storage, geo, settings.currency))
+            publisher.publish(build_payload(storage, geo, settings.currency,
+                                            marker=settings.tp_marker))
 
     storage.close()
     return 1 if report.errors and not report.offers_seen else 0
@@ -181,7 +182,7 @@ def cmd_publish(args: argparse.Namespace, settings: Settings) -> int:
     settings.ensure_dirs()
     storage = Storage(settings.db_path)
     geo = Geo(settings.cache_dir)
-    payload = build_payload(storage, geo, settings.currency)
+    payload = build_payload(storage, geo, settings.currency, marker=settings.tp_marker)
 
     if args.stdout:
         import json

@@ -12,10 +12,8 @@ origin = "TLV"
 mode = "discover"
 min_nights = 2
 
-# Ramon (Eilat) — separate charter market, worth its own sweep.
-[[watch]]
-origin = "VDA"
-mode = "discover"
+# Ramon (VDA) is deliberately absent: the Travelpayouts directory marks it
+# "not flightable", so sweeping it only produces an HTTP 400 every run.
 
 [[watch]]
 origin = "TLV"

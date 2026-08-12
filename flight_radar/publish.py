@@ -13,16 +13,17 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from .config import Settings
 from .geo import Geo
+from .providers.travelpayouts import booking_url
 from .storage import Storage
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _clean(value: Any) -> Any:
@@ -30,11 +31,19 @@ def _clean(value: Any) -> Any:
     return value if value not in ("", None) else None
 
 
+def _as_date(value: Any) -> Optional[date]:
+    try:
+        return date.fromisoformat(value[:10]) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
 def build_payload(
     storage: Storage,
     geo: Optional[Geo] = None,
     currency: str = "usd",
     deal_limit: int = 500,
+    marker: str = "",
 ) -> dict:
     stats = storage.stats()
 
@@ -65,6 +74,34 @@ def build_payload(
             }
         )
 
+    current = []
+    for row in storage.cheapest_current(limit=80):
+        origin, destination = row["origin"], row["destination"]
+        current.append(
+            {
+                "origin": origin,
+                "destination": destination,
+                "destination_name": geo.name(destination) if geo else destination,
+                "country": geo.country(destination) if geo else "",
+                "price": row["price"],
+                "currency": row["currency"],
+                "depart_date": _clean(row["depart_date"]),
+                "return_date": _clean(row["return_date"]),
+                "nights": row["trip_nights"],
+                "transfers": row["transfers"],
+                "airline": _clean(row["airline"]),
+                "observed_at": row["observed_at"],
+                "url": booking_url(
+                    origin,
+                    destination,
+                    _as_date(row["depart_date"]),
+                    _as_date(row["return_date"]),
+                    row["deep_link"],
+                    marker,
+                ),
+            }
+        )
+
     routes = []
     for row in storage.top_routes(limit=60):
         origin, destination = row["origin"], row["destination"]
@@ -92,6 +129,7 @@ def build_payload(
             "first_seen": stats["first_seen"],
         },
         "deals": deals,
+        "current": current,
         "routes": routes,
     }
 

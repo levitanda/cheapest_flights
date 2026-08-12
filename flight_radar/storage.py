@@ -281,6 +281,29 @@ class Storage:
             (limit,),
         ).fetchall()
 
+    def cheapest_current(self, limit: int = 80, max_age_hours: int = 72) -> list[sqlite3.Row]:
+        """The cheapest recently-seen fare per route.
+
+        This is what the site shows before any route has enough history to
+        produce a deal. Without it the page would sit empty for a week while
+        the scanner quietly collected hundreds of perfectly good fares.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        return self._conn.execute(
+            """SELECT * FROM (
+                   SELECT *, ROW_NUMBER() OVER (
+                       PARTITION BY origin, destination, trip_kind
+                       ORDER BY price ASC
+                   ) AS rn
+                   FROM observations
+                   WHERE observed_at >= ?
+               )
+               WHERE rn = 1
+               ORDER BY price ASC
+               LIMIT ?""",
+            (cutoff, limit),
+        ).fetchall()
+
     def recent_alerts(self, limit: int = 20) -> list[sqlite3.Row]:
         return self._conn.execute(
             "SELECT * FROM alerts ORDER BY sent_at DESC LIMIT ?", (limit,)

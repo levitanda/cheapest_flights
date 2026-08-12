@@ -1,0 +1,17 @@
+[Unit]
+Description=Flight Deal Radar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cheapest_flights
+EnvironmentFile=/opt/cheapest_flights/.env
+ExecStart=/opt/cheapest_flights/.venv/bin/python -m flight_radar watch
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

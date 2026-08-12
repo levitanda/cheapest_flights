@@ -1,0 +1,48 @@
+# Copy to watchlist.toml and edit.
+#
+# discover — one API call, cheapest fare from an airport to everywhere it
+#            flies. This is what surfaces trips you weren't looking for.
+# track    — month-by-month drill-down on one route. Costs a call per month
+#            but builds the dense history the statistical detector needs.
+
+[defaults]
+max_nights = 21
+
+# Everything out of Ben Gurion.
+[[watch]]
+origin = "TLV"
+mode = "discover"
+min_nights = 2
+
+# Ramon (Eilat) — cheap charter departures, worth its own sweep.
+[[watch]]
+origin = "VDA"
+mode = "discover"
+
+# Only European destinations from TLV, short trips, nothing over $250.
+# [[watch]]
+# origin = "TLV"
+# mode = "discover"
+# max_price = 250
+# max_nights = 7
+# include_countries = ["GR", "IT", "ES", "PT", "FR", "DE", "NL", "GB", "CY"]
+
+# Routes worth watching closely. Each builds real price history, so after a
+# few weeks these get the sharper statistical detector rather than the
+# distance heuristic.
+[[watch]]
+origin = "TLV"
+destination = "BKK"
+months_ahead = 6
+min_nights = 10
+
+[[watch]]
+origin = "TLV"
+destination = "JFK"
+months_ahead = 6
+
+[[watch]]
+origin = "TLV"
+destination = "ATH"
+months_ahead = 3
+max_nights = 10

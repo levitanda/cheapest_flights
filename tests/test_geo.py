@@ -39,6 +39,34 @@ class TestExpectedPrice:
         assert expected_round_trip_usd(0) == pytest.approx(40.0)
 
 
+class TestShippedData:
+    """The override files are source, not runtime state.
+
+    A bare `data/` line in .gitignore once matched flight_radar/data/ too, so
+    they were never committed — everything passed locally and the site went
+    out in English. Assert on the packaged files directly.
+    """
+
+    def test_hebrew_override_file_is_present_and_parses(self):
+        from flight_radar.geo import _OVERRIDES_DIR
+
+        path = _OVERRIDES_DIR / "cities_he.json"
+        assert path.is_file(), f"{path} is missing from the package"
+        assert json.loads(path.read_text(encoding="utf-8"))
+
+    def test_overrides_load_and_cover_common_israeli_destinations(self):
+        from flight_radar.geo import _load_overrides
+
+        hebrew = _load_overrides()["he"]
+        for code in ("TLV", "ATH", "LCA", "BKK", "JFK", "IST", "BCN"):
+            assert code in hebrew, f"no Hebrew name for {code}"
+
+    def test_documentation_keys_are_not_treated_as_airports(self):
+        from flight_radar.geo import _load_overrides
+
+        assert not [k for k in _load_overrides()["he"] if k.startswith("_")]
+
+
 class TestGeo:
     def test_lookups(self, geo):
         assert geo.coords("TLV") is not None

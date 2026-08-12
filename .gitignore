@@ -3,7 +3,9 @@ __pycache__/
 .venv/
 venv/
 .env
-data/
+# Anchored to the repo root: a bare `data/` also matched flight_radar/data/,
+# which is shipped source, and silently kept the Hebrew names out of the build.
+/data/
 *.sqlite3
 .pytest_cache/
 .coverage

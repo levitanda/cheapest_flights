@@ -110,7 +110,9 @@ footer a { color: var(--accent); }
 <div class="stats" id="stats"></div>
 
 <div class="controls">
-  <input id="q" type="search" placeholder="Поиск по городу или коду аэропорта…" autocomplete="off">
+  <input id="q" type="search" list="places" placeholder="Поиск по городу или коду аэропорта…"
+         autocomplete="off" spellcheck="false">
+  <datalist id="places"></datalist>
   <select id="tier">
     <option value="">Все уровни</option>
     <option value="error_fare">Ошибочные тарифы</option>
@@ -177,6 +179,33 @@ const el = (tag, cls, text) => {
 
 let DEALS = [];
 
+function fillSuggestions(payload) {
+  // Suggest every place the radar knows about, not only the ones that
+  // currently have a deal — otherwise a route you watch looks unsearchable
+  // until it happens to be on sale.
+  const seen = new Map();
+  const add = (code, name) => {
+    if (!code || seen.has(code)) return;
+    seen.set(code, name && name !== code ? name + " (" + code + ")" : code);
+  };
+  (payload.deals || []).forEach((d) => {
+    add(d.destination, d.destination_name);
+    add(d.origin, d.origin_name);
+  });
+  (payload.routes || []).forEach((r) => {
+    add(r.destination, r.destination_name);
+    add(r.origin, r.origin);
+  });
+
+  const list = document.getElementById("places");
+  list.replaceChildren(...[...seen.values()].sort((a, b) => a.localeCompare(b, "ru"))
+    .map((label) => {
+      const o = document.createElement("option");
+      o.value = label;
+      return o;
+    }));
+}
+
 function renderStats(p) {
   const s = p.stats || {};
   const items = [
@@ -242,11 +271,16 @@ function apply() {
   const tier = document.getElementById("tier").value;
   const sort = document.getElementById("sort").value;
 
+  // Tokenised so that picking a suggestion verbatim ("Афины (ATH)") still
+  // matches: every token has to appear somewhere in the row, in any order.
+  const tokens = q.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
   let list = DEALS.filter((d) => {
     if (tier && d.tier !== tier) return false;
-    if (!q) return true;
-    return [d.destination, d.destination_name, d.origin, d.origin_name, d.country]
-      .some((v) => (v || "").toLowerCase().includes(q));
+    if (!tokens.length) return true;
+    const hay = [d.destination, d.destination_name, d.origin, d.origin_name, d.country]
+      .filter(Boolean).join(" ").toLowerCase();
+    return tokens.every((t) => hay.includes(t));
   });
 
   if (sort === "discount") list.sort((a, b) => b.drop_pct - a.drop_pct);
@@ -298,6 +332,7 @@ fetch(DATA_URL, { cache: "no-cache" })
     DEALS = p.deals || [];
     renderStats(p);
     renderRoutes(p.routes);
+    fillSuggestions(p);
     document.getElementById("meta").textContent =
       "Обновлено " + ago(p.generated_at) + " · " + DEALS.length + " находок в базе";
     apply();

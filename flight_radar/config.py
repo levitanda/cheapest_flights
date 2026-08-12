@@ -73,6 +73,10 @@ class Settings:
     site_bucket: str
     site_data_key: str
 
+    # --- durable state (Lambda has no disk that survives an invocation) -----
+    state_bucket: str
+    state_prefix: str
+
     # --- notifiers ---------------------------------------------------------
     telegram_token: str
     telegram_chat_id: str
@@ -121,6 +125,8 @@ class Settings:
             scan_interval_minutes=_i("SCAN_INTERVAL_MINUTES", 180),
             site_bucket=os.environ.get("SITE_BUCKET", ""),
             site_data_key=os.environ.get("SITE_DATA_KEY", "data/deals.json"),
+            state_bucket=os.environ.get("STATE_BUCKET", ""),
+            state_prefix=os.environ.get("STATE_PREFIX", "state"),
             telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
             pushover_token=os.environ.get("PUSHOVER_APP_TOKEN", ""),

@@ -5,11 +5,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A second push while a deploy is mid-flight would race rsync and systemctl
-# against each other. Queue instead, and never cancel a deploy already running.
+# Two pushes in quick succession would otherwise race each other's
+# update-function-code calls. Queue rather than cancel.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  FUNCTION_NAME: flight-radar-scan
+  SITE_BUCKET: isr-cheap-flight-site-654654296346
+  DISTRIBUTION_ID: EWANFAR53TRLY
 
 jobs:
   test:
@@ -23,140 +29,92 @@ jobs:
       - run: python -m pytest -q
 
   site:
-    # Independent of the server deploy: the frontend is static and lives in
-    # S3, so a broken box must not stop the page from updating, and vice versa.
+    # Independent of the scanner deploy: the page is static, so a bad function
+    # build must not freeze the site, and vice versa.
     needs: test
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Upload site to S3
+      - name: Check credentials
+        env:
+          KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -z "${KEY:-}" ]; then
+            echo "::error::AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are not set"
+            echo "See the Deployment section of README.md."
+            exit 1
+          fi
+
+      - name: Upload site
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: eu-central-1
-          BUCKET: ${{ secrets.SITE_BUCKET }}
-          DIST_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
         run: |
           set -euo pipefail
-          if [ -z "${BUCKET:-}" ]; then
-            echo "::warning::SITE_BUCKET not set, skipping site deploy"
-            exit 0
-          fi
-          aws s3 cp site/index.html "s3://$BUCKET/index.html" \
+          aws s3 cp site/index.html "s3://$SITE_BUCKET/index.html" \
             --content-type "text/html; charset=utf-8" \
             --cache-control "public, max-age=300"
-          # Only index.html — never data/deals.json, which the scanner owns.
-          if [ -n "${DIST_ID:-}" ]; then
-            aws cloudfront create-invalidation \
-              --distribution-id "$DIST_ID" --paths "/index.html" "/" >/dev/null
-            echo "CDN invalidated"
-          fi
+          # index.html only. data/deals.json belongs to the scanner, and
+          # overwriting it here would wipe the latest findings.
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" --paths "/index.html" "/" >/dev/null
+          echo "site deployed and CDN invalidated"
 
-  deploy:
+  scanner:
     needs: test
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - name: Check required secrets
+      - name: Check credentials
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          ENV_FILE: ${{ secrets.ENV_FILE }}
+          KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
         run: |
-          # Without this the run dies inside ssh-keyscan with an error that
-          # says nothing about the actual cause.
-          missing=""
-          for name in SSH_PRIVATE_KEY SSH_HOST SSH_USER ENV_FILE; do
-            [ -z "$(eval printf '%s' "\"\$$name\"")" ] && missing="$missing $name"
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing"
-            echo "Set them under Settings -> Secrets and variables -> Actions."
-            echo "See the Deployment section of README.md for what each one holds."
+          if [ -z "${KEY:-}" ]; then
+            echo "::error::AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are not set"
             exit 1
           fi
-          echo "All required secrets are present."
 
-      - name: Configure ssh
+      - name: Build deployment package
+        run: bash deploy/build_lambda.sh
+
+      - name: Update function code
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://dist/flight-radar-lambda.zip \
+            --publish >/dev/null
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
+          echo "function code updated"
 
-          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
-            # Pinned host key — the deploy fails loudly if the server identity
-            # ever changes.
-            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            # Trust-on-first-use for every run. Works, but cannot detect a
-            # man-in-the-middle: capture the real key once with
-            #   ssh-keyscan -H <host>
-            # and store it as the SSH_KNOWN_HOSTS secret to close that gap.
-            echo "::warning::SSH_KNOWN_HOSTS is not set; falling back to ssh-keyscan"
-            ssh-keyscan -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+      - name: Verify the new code actually loads
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          # update-function-code succeeds even when the package cannot be
+          # imported, so a deploy that reports success can still leave a
+          # function that fails on every schedule tick. Invoke once and reject
+          # the import-time failures.
+          aws lambda invoke --function-name "$FUNCTION_NAME" \
+            --payload '{"source":"deploy-verify"}' --cli-binary-format raw-in-base64-out \
+            /tmp/out.json >/tmp/meta.json
+          cat /tmp/out.json; echo
+          if grep -qE 'Runtime.ImportModuleError|Unable to import module|SyntaxError' /tmp/out.json; then
+            echo "::error::the deployed package does not import"
+            exit 1
           fi
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Ship code and config
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          ENV_FILE: ${{ secrets.ENV_FILE }}
-          WATCHLIST: ${{ secrets.WATCHLIST }}
-        run: |
-          set -euo pipefail
-          STAGE=/tmp/flight-radar-stage
-          SSH="ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes"
-          TARGET="$SSH_USER@$SSH_HOST"
-
-          $SSH "$TARGET" "rm -rf $STAGE && mkdir -p $STAGE"
-
-          # Only committed content reaches the server.
-          git archive --format=tar HEAD | $SSH "$TARGET" "tar -x -C $STAGE"
-
-          # umask so the secret is never even briefly world-readable on disk.
-          printf '%s\n' "$ENV_FILE" | $SSH "$TARGET" "umask 077 && cat > $STAGE/.env"
-
-          if [ -n "${WATCHLIST:-}" ]; then
-            printf '%s\n' "$WATCHLIST" | $SSH "$TARGET" "cat > $STAGE/watchlist.toml"
-          fi
-
-      - name: Run bootstrap
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-        run: |
-          set -euo pipefail
-          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-            "chmod +x /tmp/flight-radar-stage/deploy/bootstrap.sh && \
-             /tmp/flight-radar-stage/deploy/bootstrap.sh"
-
-      - name: Confirm the service is actually running
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-        run: |
-          set -euo pipefail
-          # systemctl restart returns before a crash-on-startup shows up, so
-          # give it a moment and then assert, otherwise a broken deploy would
-          # report success.
-          sleep 10
-          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-            'systemctl is-active --quiet flight-radar \
-             || { echo "service is not active:"; \
-                  journalctl -u flight-radar -n 40 --no-pager; exit 1; }'
-          echo "flight-radar is active"
-
-      - name: Remove the key from the runner
-        if: always()
-        run: rm -f ~/.ssh/deploy_key
+          echo "package imports cleanly"

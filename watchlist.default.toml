@@ -1,0 +1,35 @@
+# Baked into the Lambda package. Editing this file and redeploying is how the
+# watchlist changes — there is no writable disk on the function to edit.
+#
+# Budget note: `discover` costs one API call, `track` costs one per month.
+# This list is 2 + 12 = 14 calls per invocation.
+
+[defaults]
+max_nights = 21
+
+[[watch]]
+origin = "TLV"
+mode = "discover"
+min_nights = 2
+
+# Ramon (Eilat) — separate charter market, worth its own sweep.
+[[watch]]
+origin = "VDA"
+mode = "discover"
+
+[[watch]]
+origin = "TLV"
+destination = "BKK"
+months_ahead = 4
+min_nights = 10
+
+[[watch]]
+origin = "TLV"
+destination = "JFK"
+months_ahead = 4
+
+[[watch]]
+origin = "TLV"
+destination = "ATH"
+months_ahead = 4
+max_nights = 10

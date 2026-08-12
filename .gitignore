@@ -9,3 +9,5 @@ data/
 .coverage
 htmlcov/
 watchlist.toml
+build/
+dist/

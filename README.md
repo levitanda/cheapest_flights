@@ -154,45 +154,77 @@ months_ahead = 6
 линии, и качество алертов заметно растёт. Поэтому имеет смысл держать сервис
 запущенным постоянно, а не запускать руками.
 
-### GitHub Actions (основной путь)
+Сервера нет: сканер живёт в AWS Lambda, расписание даёт EventBridge, а
+история цен — единственное, ради чего вообще нужен был постоянный хост —
+синхронизируется с S3 в начале и в конце каждого запуска.
 
-Каждый пуш в `main` прогоняет тесты и, если они зелёные, выкатывается на
-сервер: `.github/workflows/deploy.yml`. Деплой падает, если сервис не поднялся
-— проверка `systemctl is-active` после рестарта, иначе сломанный выкат
-отрапортовал бы успех.
+```
+EventBridge (rate 3 hours)
+      └─> Lambda flight-radar-scan
+            ├── pull  s3://flight-radar-state-…/state/   (SQLite + справочники)
+            ├── scan  Travelpayouts → детектор → Telegram
+            ├── push  s3://…-site-…/data/deals.json      (данные для сайта)
+            └── push  s3://flight-radar-state-…/state/   (обновлённая история)
+```
 
-Нужны секреты репозитория (Settings → Secrets and variables → Actions):
+Корректность держится на том, что писатель ровно один: у функции
+`ReservedConcurrentExecutions=1`, иначе второй параллельный запуск затёр бы
+наблюдения первого при выгрузке базы.
 
-| Секрет | Что это |
+### Ресурсы в AWS
+
+| Что | Идентификатор |
 |---|---|
-| `SSH_PRIVATE_KEY` | приватный ключ деплоя целиком, включая строки BEGIN/END |
-| `SSH_HOST` | IP или домен сервера |
-| `SSH_USER` | пользователь на сервере (`ubuntu`) |
-| `ENV_FILE` | всё содержимое `.env` — токен, Telegram и пороги |
-| `SSH_KNOWN_HOSTS` | необязательно, но желательно: вывод `ssh-keyscan -H <host>` |
-| `WATCHLIST` | необязательно: содержимое `watchlist.toml` |
+| функция | `flight-radar-scan` (python3.11, 512 МБ, таймаут 300 с) |
+| расписание | правило `flight-radar-schedule`, `rate(3 hours)` |
+| состояние | `s3://flight-radar-state-654654296346/state/` (приватный) |
+| сайт | `s3://isr-cheap-flight-site-654654296346` за CloudFront `EWANFAR53TRLY` |
+| роль | `flight-radar-lambda-role` |
 
-Без `SSH_KNOWN_HOSTS` воркфлоу делает `ssh-keyscan` на каждом запуске — это
-работает, но не отличит подмену сервера. Снять ключ один раз и положить в
-секрет:
+История лежит в **отдельном** бакете от сайта: положи её рядом со статикой —
+и CloudFront отдавал бы базу по прямой ссылке.
 
-```bash
-ssh-keyscan -H 63.183.211.59
-```
+### Секреты функции
 
-Воркфлоу использует окружение `production` — если завести его в настройках
-репозитория, можно дополнительно требовать ручного подтверждения перед выкатом.
-
-### Ручной деплой
-
-Тот же `bootstrap.sh`, запущенный со своей машины — на случай, когда Actions
-недоступны:
+Токены живут в переменных окружения Lambda, не в репозитории:
 
 ```bash
-./deploy/deploy.sh ubuntu@63.183.211.59 ~/.ssh/deploy_key
+aws lambda update-function-configuration \
+  --function-name flight-radar-scan --region eu-central-1 \
+  --environment 'Variables={
+      DATA_DIR=/tmp/flight-radar,
+      STATE_BUCKET=flight-radar-state-654654296346,
+      STATE_PREFIX=state,
+      SITE_BUCKET=isr-cheap-flight-site-654654296346,
+      SITE_DATA_KEY=data/deals.json,
+      CURRENCY=usd,
+      TRAVELPAYOUTS_TOKEN=ваш_токен,
+      TELEGRAM_BOT_TOKEN=ваш_бот,
+      TELEGRAM_CHAT_ID=ваш_id}'
 ```
 
-Скрипт шлёт только закоммиченное (`git archive HEAD`) плюс локальный `.env`.
+Расписание создано **выключенным** — включённое без токена оно просто падало бы
+восемь раз в сутки. После настройки токенов:
+
+```bash
+aws events enable-rule --name flight-radar-schedule --region eu-central-1
+```
+
+### CI
+
+Каждый пуш в `main` прогоняет тесты, затем двумя независимыми задачами
+выкладывает сайт и пересобирает функцию. `update-function-code` возвращает
+успех даже для пакета, который не импортируется, поэтому после выкладки
+воркфлоу один раз вызывает функцию и валит деплой на `ImportModuleError`.
+
+Секреты репозитория: `AWS_ACCESS_KEY_ID` и `AWS_SECRET_ACCESS_KEY` от
+пользователя `flight-radar-site-deployer` — он умеет только положить
+`index.html`, обновить код функции и сбросить кэш CDN.
+
+### Локально и на своём сервере
+
+Режим `watch` никуда не делся: `python -m flight_radar watch` или контейнер из
+`Dockerfile` — если захочется держать сканер у себя, а не в Lambda.
 
 ### Docker
 

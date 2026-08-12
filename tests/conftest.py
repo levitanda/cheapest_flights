@@ -34,6 +34,8 @@ def settings(tmp_path: Path) -> Settings:
         scan_interval_minutes=180,
         site_bucket="",
         site_data_key="data/deals.json",
+        state_bucket="",
+        state_prefix="state",
         telegram_token="",
         telegram_chat_id="",
         pushover_token="",

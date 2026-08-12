@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 
 from .config import Settings
 from .geo import Geo
@@ -40,6 +41,11 @@ def _watchlist_path(settings: Settings):
 
 
 def handler(event, context):  # noqa: ARG001 - Lambda signature
+    # The runtime's SQLite is older than a developer machine's and rejects
+    # syntax that works locally — window functions, notably. Logging the
+    # version turns "syntax error" into a one-line diagnosis.
+    logger.info("python sqlite %s", sqlite3.sqlite_version)
+
     settings = Settings.from_env()
     settings.ensure_dirs()
 

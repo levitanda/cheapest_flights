@@ -287,21 +287,30 @@ class Storage:
         This is what the site shows before any route has enough history to
         produce a deal. Without it the page would sit empty for a week while
         the scanner quietly collected hundreds of perfectly good fares.
+
+        Written as a join against a grouped subquery rather than
+        ROW_NUMBER() OVER (...): the SQLite bundled with the Lambda runtime
+        rejects window functions outright, and this form works everywhere.
+        The outer GROUP BY collapses ties when two rows share the minimum.
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
         return self._conn.execute(
-            """SELECT * FROM (
-                   SELECT *, ROW_NUMBER() OVER (
-                       PARTITION BY origin, destination, trip_kind
-                       ORDER BY price ASC
-                   ) AS rn
+            """SELECT o.* FROM observations o
+               JOIN (
+                   SELECT origin, destination, trip_kind, MIN(price) AS best
                    FROM observations
                    WHERE observed_at >= ?
-               )
-               WHERE rn = 1
-               ORDER BY price ASC
+                   GROUP BY origin, destination, trip_kind
+               ) m
+                 ON o.origin = m.origin
+                AND o.destination = m.destination
+                AND o.trip_kind = m.trip_kind
+                AND o.price = m.best
+               WHERE o.observed_at >= ?
+               GROUP BY o.origin, o.destination, o.trip_kind
+               ORDER BY o.price ASC
                LIMIT ?""",
-            (cutoff, limit),
+            (cutoff, cutoff, limit),
         ).fetchall()
 
     def recent_alerts(self, limit: int = 20) -> list[sqlite3.Row]:

@@ -75,3 +75,27 @@ def test_round_trip_and_one_way_are_listed_separately(storage, geo):
 
 def test_empty_database_yields_an_empty_list(storage, geo):
     assert build_payload(storage, geo)["current"] == []
+
+
+def test_query_uses_no_window_functions(storage):
+    """The SQLite bundled with the Lambda runtime rejects ROW_NUMBER() OVER,
+    and the first version of this query only failed once deployed. A local
+    test cannot reproduce that, so assert on the SQL we actually ship."""
+    import inspect
+
+    from flight_radar.storage import Storage
+
+    body = inspect.getsource(Storage.cheapest_current)
+    sql = body.split('"""')[2]  # everything after the docstring
+
+    assert "ROW_NUMBER" not in sql
+    assert "OVER (" not in sql
+
+
+def test_ties_do_not_duplicate_a_route(storage, geo):
+    """Two rows sharing the minimum price must still yield one card."""
+    storage.record_offers([
+        make_offer(destination="ATH", price=111),
+        make_offer(destination="ATH", price=111),
+    ])
+    assert len(build_payload(storage, geo)["current"]) == 1

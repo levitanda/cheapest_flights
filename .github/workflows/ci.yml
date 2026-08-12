@@ -1,8 +1,8 @@
 name: CI
 
+# Pushes to main are covered by the test job in deploy.yml, so this only
+# guards pull requests — no point running the suite twice per merge.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 jobs:

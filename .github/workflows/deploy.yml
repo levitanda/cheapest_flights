@@ -1,0 +1,109 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push while a deploy is mid-flight would race rsync and systemctl
+# against each other. Queue instead, and never cancel a deploy already running.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure ssh
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            # Pinned host key — the deploy fails loudly if the server identity
+            # ever changes.
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # Trust-on-first-use for every run. Works, but cannot detect a
+            # man-in-the-middle: capture the real key once with
+            #   ssh-keyscan -H <host>
+            # and store it as the SSH_KNOWN_HOSTS secret to close that gap.
+            echo "::warning::SSH_KNOWN_HOSTS is not set; falling back to ssh-keyscan"
+            ssh-keyscan -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Ship code and config
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          WATCHLIST: ${{ secrets.WATCHLIST }}
+        run: |
+          set -euo pipefail
+          STAGE=/tmp/flight-radar-stage
+          SSH="ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes"
+          TARGET="$SSH_USER@$SSH_HOST"
+
+          $SSH "$TARGET" "rm -rf $STAGE && mkdir -p $STAGE"
+
+          # Only committed content reaches the server.
+          git archive --format=tar HEAD | $SSH "$TARGET" "tar -x -C $STAGE"
+
+          # umask so the secret is never even briefly world-readable on disk.
+          printf '%s\n' "$ENV_FILE" | $SSH "$TARGET" "umask 077 && cat > $STAGE/.env"
+
+          if [ -n "${WATCHLIST:-}" ]; then
+            printf '%s\n' "$WATCHLIST" | $SSH "$TARGET" "cat > $STAGE/watchlist.toml"
+          fi
+
+      - name: Run bootstrap
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+            "chmod +x /tmp/flight-radar-stage/deploy/bootstrap.sh && \
+             /tmp/flight-radar-stage/deploy/bootstrap.sh"
+
+      - name: Confirm the service is actually running
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          # systemctl restart returns before a crash-on-startup shows up, so
+          # give it a moment and then assert, otherwise a broken deploy would
+          # report success.
+          sleep 10
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+            'systemctl is-active --quiet flight-radar \
+             || { echo "service is not active:"; \
+                  journalctl -u flight-radar -n 40 --no-pager; exit 1; }'
+          echo "flight-radar is active"
+
+      - name: Remove the key from the runner
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

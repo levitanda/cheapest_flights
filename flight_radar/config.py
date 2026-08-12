@@ -1,8 +1,8 @@
 """Runtime configuration, entirely env-driven so the same image runs anywhere.
 
 Only the Travelpayouts token is mandatory. Every threshold has a default that
-produces roughly 2-5 alerts a week from TLV — tighten `MIN_DROP_PCT` if that
-is too chatty.
+produces roughly 2-5 alerts a week from TLV — raise `MIN_Z_SCORE` if that is
+too chatty; it moves the volume far more than `MIN_DROP_PCT` does.
 """
 
 from __future__ import annotations

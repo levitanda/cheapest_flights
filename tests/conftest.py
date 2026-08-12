@@ -19,6 +19,8 @@ def settings(tmp_path: Path) -> Settings:
         currency="usd",
         usd_rate=1.0,
         http_timeout=5,
+        market="il",
+        enrich_limit=30,
         data_dir=tmp_path,
         keep_history_days=365,
         baseline_window_days=90,
@@ -50,44 +52,42 @@ def storage(tmp_path: Path) -> Storage:
     store.close()
 
 
+# Coordinates are the real ones so distance-based assertions stay meaningful.
+_PLACES = {
+    "TLV": ((32.0114, 34.8867), "IL", {"en": "Tel Aviv", "ru": "Тель-Авив"}),
+    "ATH": ((37.9364, 23.9445), "GR", {"en": "Athens", "ru": "Афины"}),
+    "BKK": ((13.6900, 100.7501), "TH", {"en": "Bangkok", "ru": "Бангкок"}),
+    "JFK": ((40.6413, -73.7781), "US", {"en": "New York", "ru": "Нью-Йорк"}),
+    "LCA": ((34.8751, 33.6249), "CY", {"en": "Larnaca", "ru": "Ларнака"}),
+}
+
+
 @pytest.fixture
 def geo(tmp_path: Path) -> Geo:
-    """Geo backed by a fixed in-memory table — no network, stable distances."""
-    airports = [
-        {
-            "code": "TLV",
-            "name": "Ben Gurion",
-            "coordinates": {"lat": 32.0114, "lon": 34.8867},
-            "country_code": "IL",
-            "name_translations": {"ru": "Тель-Авив"},
-        },
-        {
-            "code": "ATH",
-            "name": "Athens",
-            "coordinates": {"lat": 37.9364, "lon": 23.9445},
-            "country_code": "GR",
-            "name_translations": {"ru": "Афины"},
-        },
-        {
-            "code": "BKK",
-            "name": "Suvarnabhumi",
-            "coordinates": {"lat": 13.6900, "lon": 100.7501},
-            "country_code": "TH",
-            "name_translations": {"ru": "Бангкок"},
-        },
-        {
-            "code": "JFK",
-            "name": "John F Kennedy",
-            "coordinates": {"lat": 40.6413, "lon": -73.7781},
-            "country_code": "US",
-            "name_translations": {"ru": "Нью-Йорк"},
-        },
-    ]
+    """Geo backed by a fixed in-memory table — no network, stable distances.
+
+    Hebrew is deliberately absent from the fake dumps: upstream publishes no
+    Hebrew, so tests exercise the same override path production relies on.
+    """
 
     def fake_fetch(url: str):
-        return airports if "airports" in url else []
+        if "cities" not in url:
+            return []
+        lang = "ru" if "/ru/" in url else "en"
+        return [
+            {
+                "code": code,
+                "name": names.get("en", code),
+                "coordinates": {"lat": coords[0], "lon": coords[1]},
+                "country_code": country,
+                "name_translations": {lang: names.get(lang, names["en"])},
+            }
+            for code, (coords, country, names) in _PLACES.items()
+        ]
 
-    return Geo(tmp_path / "cache", fetch=fake_fetch)
+    from flight_radar.geo import SITE_LANGS
+
+    return Geo(tmp_path / "cache", fetch=fake_fetch, langs=SITE_LANGS)
 
 
 # `ret=None` has to mean "one-way", which a None default would swallow.

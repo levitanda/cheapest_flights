@@ -17,7 +17,7 @@ import os
 import sqlite3
 
 from .config import Settings
-from .geo import Geo
+from .geo import SITE_LANGS, Geo
 from .notify import build_notifiers
 from .providers.travelpayouts import TravelpayoutsProvider
 from .publish import build_payload, publisher_from
@@ -58,12 +58,13 @@ def handler(event, context):  # noqa: ARG001 - Lambda signature
         state.pull()
 
     storage = Storage(settings.db_path)
-    geo = Geo(settings.cache_dir)
+    geo = Geo(settings.cache_dir, langs=SITE_LANGS)
     provider = TravelpayoutsProvider(
         token=settings.tp_token,
         currency=settings.currency,
         marker=settings.tp_marker,
         timeout=settings.http_timeout,
+        market=settings.market,
     )
     entries = load_watchlist(_watchlist_path(settings))
     notifiers = build_notifiers(settings, geo)

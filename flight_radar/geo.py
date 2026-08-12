@@ -14,15 +14,41 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
+_OVERRIDES_DIR = Path(__file__).with_name("data")
+
+
+def _load_overrides() -> dict[str, dict[str, str]]:
+    """Read `data/cities_<lang>.json` files shipped with the package."""
+    out: dict[str, dict[str, str]] = {}
+    if not _OVERRIDES_DIR.is_dir():
+        return out
+    for path in sorted(_OVERRIDES_DIR.glob("cities_*.json")):
+        lang = path.stem.split("_", 1)[1]
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("geo: bad override file %s: %s", path.name, exc)
+            continue
+        if isinstance(payload, dict):
+            # Underscore keys carry documentation, not airports.
+            out[lang] = {
+                str(k).upper(): str(v)
+                for k, v in payload.items()
+                if not str(k).startswith("_")
+            }
+    return out
+
 _DUMP_URL = "https://api.travelpayouts.com/data/{lang}/{name}.json"
 
-# The site is Russian, and the localised dump already carries Russian names,
-# so there is nothing to translate at render time.
-DEFAULT_LANG = "ru"
+# The site leads in Hebrew for an Israeli audience, with Russian and English
+# behind a switcher. Names are resolved in all three at publish time so the
+# page never has to fetch a translation.
+DEFAULT_LANG = "he"
+SITE_LANGS = ("he", "ru", "en")
 
 # The reference tables change a few times a year at most.
 _CACHE_TTL_SECONDS = 30 * 24 * 3600
@@ -72,11 +98,16 @@ class Geo:
         fetch: Optional[Callable[[str], list | dict]] = None,
         ttl_seconds: int = _CACHE_TTL_SECONDS,
         lang: str = DEFAULT_LANG,
+        langs: Optional[Sequence[str]] = None,
     ) -> None:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.ttl_seconds = ttl_seconds
         self.lang = lang
+        # The site offers three languages, so every name is resolved in all of
+        # them once and shipped together — the page must not have to call back
+        # for a translation when the reader flips the switcher.
+        self.langs = tuple(langs) if langs else (lang,)
         self._fetch = fetch or self._http_fetch
         self._points: dict[str, dict] = {}
         self._loaded = False
@@ -114,53 +145,106 @@ class Geo:
         # display name: for a code like ATH the airport row reads "Eleftherios
         # Venizelos International Airport" where the city row reads "Афины",
         # and the second is what belongs on a page of flight deals.
-        for source in ("cities", "airports"):
-            # Cache filenames carry the language. Without that, switching
-            # language would keep serving the previously cached dump forever,
-            # because the cache is keyed by filename alone.
-            filename = f"{source}.{self.lang}.json"
-            url = _DUMP_URL.format(lang=self.lang, name=source)
-            try:
-                payload = self._cached(filename, url)
-            except Exception as exc:
-                logger.warning("geo: failed to load %s: %s", source, exc)
-                continue
-            is_airport = source.startswith("airports")
-            for entry in payload if isinstance(payload, list) else []:
-                code = (entry.get("code") or "").upper()
-                coords = entry.get("coordinates") or {}
-                lat, lon = coords.get("lat"), coords.get("lon")
-                if not code or lat is None or lon is None:
+        for lang in self.langs:
+            for source in ("cities", "airports"):
+                # Cache filenames carry the language. Without that, switching
+                # language would keep serving the previously cached dump
+                # forever, because the cache is keyed by filename alone.
+                filename = f"{source}.{lang}.json"
+                url = _DUMP_URL.format(lang=lang, name=source)
+                try:
+                    payload = self._cached(filename, url)
+                except Exception as exc:
+                    logger.warning("geo: failed to load %s/%s: %s", lang, source, exc)
                     continue
-                point = self._points.get(code)
-                if point is None:
-                    self._points[code] = {
-                        "lat": float(lat),
-                        "lon": float(lon),
-                        "name": entry.get("name") or code,
-                        "translations": entry.get("name_translations") or {},
-                        "country": entry.get("country_code") or "",
-                    }
-                elif is_airport:
-                    point["lat"] = float(lat)
-                    point["lon"] = float(lon)
-                    point["country"] = point["country"] or (entry.get("country_code") or "")
+                self._absorb(payload, lang, is_airport=source == "airports")
+
+        self._apply_overrides()
         self._loaded = True
-        logger.info("geo: %d points loaded", len(self._points))
+        logger.info(
+            "geo: %d points loaded for %s", len(self._points), ",".join(self.langs)
+        )
+
+    def _absorb(self, payload: object, lang: str, is_airport: bool) -> None:
+        for entry in payload if isinstance(payload, list) else []:
+            code = (entry.get("code") or "").upper()
+            coords = entry.get("coordinates") or {}
+            lat, lon = coords.get("lat"), coords.get("lon")
+            if not code or lat is None or lon is None:
+                continue
+
+            point = self._points.setdefault(
+                code,
+                {"lat": float(lat), "lon": float(lon), "names": {}, "country": ""},
+            )
+            if is_airport:
+                # Airport coordinates are the precise ones for distance.
+                point["lat"] = float(lat)
+                point["lon"] = float(lon)
+            point["country"] = point["country"] or (entry.get("country_code") or "")
+
+            name = entry.get("name")
+            translations = entry.get("name_translations") or {}
+            resolved = translations.get(lang) or name
+            # City names win: the airport row for ATH reads "Eleftherios
+            # Venizelos International Airport" where the city row reads
+            # "אתונה", and the latter belongs on a page of flight deals.
+            if resolved and (not is_airport or lang not in point["names"]):
+                point["names"][lang] = resolved
+
+    def _apply_overrides(self) -> None:
+        """Overlay hand-checked names where the upstream dump has none.
+
+        Travelpayouts does not publish a Hebrew dump, so Hebrew would
+        otherwise fall back to English on every card — on a site whose whole
+        point is to be Israeli.
+        """
+        overrides = _load_overrides()
+        for lang, mapping in overrides.items():
+            for code, value in mapping.items():
+                point = self._points.get(code.upper())
+                if point:
+                    point["names"][lang] = value
+                else:
+                    # Keep the name even for a code the dumps do not carry;
+                    # coordinates stay unknown, which only disables distance.
+                    self._points[code.upper()] = {
+                        "lat": None, "lon": None,
+                        "names": {lang: value}, "country": "",
+                    }
 
     # -- lookups ------------------------------------------------------------
 
     def coords(self, iata: str) -> Optional[tuple[float, float]]:
         self.load()
         point = self._points.get(iata.upper())
-        return (point["lat"], point["lon"]) if point else None
+        if not point or point.get("lat") is None:
+            return None
+        return (point["lat"], point["lon"])
 
-    def name(self, iata: str, lang: str = "ru") -> str:
+    def name(self, iata: str, lang: Optional[str] = None) -> str:
+        """Best available name, degrading language by language to the code."""
         self.load()
-        point = self._points.get(iata.upper())
+        code = iata.upper()
+        point = self._points.get(code)
         if not point:
-            return iata.upper()
-        return point["translations"].get(lang) or point["name"]
+            return code
+        names = point["names"]
+        # English before the other site languages: a Russian reader missing a
+        # Russian name is better served "Athens" than "אתונה", and vice versa.
+        for candidate in (lang or self.lang, "en", *self.langs):
+            if names.get(candidate):
+                return names[candidate]
+        return next(iter(names.values()), code)
+
+    def names(self, iata: str) -> dict[str, str]:
+        """Every language at once, for shipping to a multilingual page."""
+        self.load()
+        code = iata.upper()
+        point = self._points.get(code)
+        if not point:
+            return {lang: code for lang in self.langs}
+        return {lang: self.name(code, lang) for lang in self.langs}
 
     def country(self, iata: str) -> str:
         self.load()

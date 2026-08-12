@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 class ScanReport:
     offers_seen: int = 0
     offers_stored: int = 0
+    enriched: int = 0
     candidates: int = 0
     alerted: int = 0
     suppressed: int = 0
@@ -105,6 +106,17 @@ def run_scan(
     for entry in watchlist:
         all_offers.extend(collect_offers(provider, entry, geo, report))
     report.offers_seen = len(all_offers)
+
+    # The discovery sweep returns prices without a bookable link. Resolve them
+    # before anything is stored or judged, so both the page and the alerts can
+    # point at the actual fare instead of a generic search.
+    enrich = getattr(provider, "enrich", None)
+    if enrich is not None and all_offers:
+        try:
+            all_offers = list(enrich(all_offers, settings.enrich_limit))
+        except Exception as exc:
+            logger.warning("deep-link enrichment failed, continuing: %s", exc)
+    report.enriched = sum(1 for o in all_offers if o.deep_link)
 
     # Judge everything first, against history as it stood before this sweep.
     candidates: list[Deal] = []

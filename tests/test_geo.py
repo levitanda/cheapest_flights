@@ -45,9 +45,17 @@ class TestGeo:
         assert geo.country("BKK") == "TH"
         assert geo.name("ATH", "ru") == "Афины"
 
-    def test_name_falls_back_to_english_then_code(self, geo):
-        assert geo.name("BKK", "fr") == "Suvarnabhumi"
+    def test_name_falls_back_through_the_site_languages(self, geo):
+        """An unsupported language degrades to a language we do have, never to
+        a bare code while a usable name exists."""
+        assert geo.name("BKK", "fr") in ("בנגקוק", "Бангкок", "Bangkok")
         assert geo.name("ZZZ") == "ZZZ"
+
+    def test_shipped_hebrew_overrides_fill_the_gap_upstream_leaves(self, geo):
+        """Travelpayouts publishes no Hebrew dump; without the override file
+        every card on an Israeli site would read English."""
+        assert geo.name("ATH", "he") == "אתונה"
+        assert geo.names("ATH")["en"] == "Athens"
 
     def test_unknown_airport_has_no_distance(self, geo):
         assert geo.distance_km("TLV", "ZZZ") is None
@@ -110,37 +118,38 @@ class TestGeo:
                 "country_code": "IL",
             }
         ]
-        geo = Geo(cache_dir, fetch=lambda url: payload if "airports" in url else [])
+        geo = Geo(cache_dir, lang="ru",
+                  fetch=lambda url: payload if "airports" in url else [])
         geo.load()
         assert geo.coords("TLV") == (32.0, 34.9)
         assert json.loads((cache_dir / "airports.ru.json").read_text())
 
     def test_city_name_wins_over_the_airport_name(self, tmp_path):
-        """'Афины' belongs on the page, not 'Eleftherios Venizelos
+        """'Athens' belongs on the page, not 'Eleftherios Venizelos
         International Airport' — but the airport's coordinates are the precise
         ones and must still be used for distance."""
-        cities = [{"code": "ATH", "name": "Athens",
-                   "coordinates": {"lat": 37.98, "lon": 23.73},
-                   "country_code": "GR", "name_translations": {"ru": "Афины"}}]
-        airports = [{"code": "ATH", "name": "Eleftherios Venizelos International Airport",
-                     "coordinates": {"lat": 37.9364, "lon": 23.9445},
-                     "country_code": "GR"}]
+        cities = [{"code": "ZRH", "name": "Zurich",
+                   "coordinates": {"lat": 47.37, "lon": 8.54},
+                   "country_code": "CH"}]
+        airports = [{"code": "ZRH", "name": "Zurich Kloten International Airport",
+                     "coordinates": {"lat": 47.4647, "lon": 8.5492},
+                     "country_code": "CH"}]
 
-        geo = Geo(tmp_path / "c",
+        geo = Geo(tmp_path / "c", lang="en",
                   fetch=lambda url: airports if "airports" in url else cities)
         geo.load()
 
-        assert geo.name("ATH") == "Афины"
-        assert geo.coords("ATH") == (37.9364, 23.9445)
+        assert geo.name("ZRH", "en") == "Zurich"
+        assert geo.coords("ZRH") == (47.4647, 8.5492)
 
     def test_airport_only_codes_still_resolve(self, tmp_path):
         airports = [{"code": "XXX", "name": "Somewhere Field",
                      "coordinates": {"lat": 1.0, "lon": 2.0}, "country_code": "ZZ"}]
-        geo = Geo(tmp_path / "c",
+        geo = Geo(tmp_path / "c", lang="en",
                   fetch=lambda url: airports if "airports" in url else [])
         geo.load()
 
-        assert geo.name("XXX") == "Somewhere Field"
+        assert geo.name("XXX", "en") == "Somewhere Field"
         assert geo.country("XXX") == "ZZ"
 
     def test_entries_without_coordinates_are_skipped(self, tmp_path):

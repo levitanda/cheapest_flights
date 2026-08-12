@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS observations (
     transfers     INTEGER,
     airline       TEXT,
     deep_link     TEXT,
+    seller        TEXT,
     source        TEXT NOT NULL,
     observed_at   TEXT NOT NULL
 );
@@ -97,6 +98,10 @@ class Storage:
         A database created before these columns existed keeps its old shape
         forever otherwise, and the insert would fail against it.
         """
+        obs = {r["name"] for r in self._conn.execute("PRAGMA table_info(observations)")}
+        if "seller" not in obs:
+            self._conn.execute("ALTER TABLE observations ADD COLUMN seller TEXT")
+
         existing = {r["name"] for r in self._conn.execute("PRAGMA table_info(alerts)")}
         for column, ddl in (
             ("depart_date", "TEXT"),
@@ -133,6 +138,7 @@ class Storage:
                 o.transfers,
                 o.airline,
                 o.deep_link,
+                o.seller,
                 o.source,
                 o.observed_at.isoformat(),
             )
@@ -145,8 +151,8 @@ class Storage:
             """INSERT INTO observations
                (origin, destination, trip_kind, price, currency, depart_date,
                 return_date, trip_nights, transfers, airline, deep_link,
-                source, observed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                seller, source, observed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows,
         )
         self._conn.commit()

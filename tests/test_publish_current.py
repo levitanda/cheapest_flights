@@ -25,7 +25,9 @@ def test_names_and_country_are_resolved(storage, geo):
     storage.record_offers([make_offer(destination="ATH", price=111)])
     row = build_payload(storage, geo)["current"][0]
 
-    assert row["destination_name"] == "Афины"
+    assert row["names"]["ru"] == "Афины"
+    assert row["names"]["he"] == "אתונה"      # from the shipped override file
+    assert row["names"]["en"] == "Athens"
     assert row["country"] == "GR"
 
 

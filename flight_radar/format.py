@@ -54,13 +54,18 @@ def date_range(depart: Optional[date], ret: Optional[date]) -> str:
     return "даты уточняются"
 
 
+# These messages go to the operator's own Telegram, not to the public site, so
+# they stay Russian even though the site now leads in Hebrew.
+NOTIFICATION_LANG = "ru"
+
+
 def _place(code: str, geo: Optional[Geo]) -> str:
     """'Афины (ATH)', or bare 'ATH' when no name is known.
 
     The reference tables can be unavailable — offline, or a first run behind a
     firewall — and letting that render as 'ATH (ATH)' looks like a bug.
     """
-    name = geo.name(code) if geo else code
+    name = geo.name(code, NOTIFICATION_LANG) if geo else code
     return code if name == code else f"{name} ({code})"
 
 
@@ -135,5 +140,9 @@ def render_plain(deal: Deal, booking_url: str, geo: Optional[Geo] = None) -> str
 
 def render_title(deal: Deal, geo: Optional[Geo] = None) -> str:
     icon, _ = _TIER_LABEL.get(deal.tier, _TIER_LABEL[TIER_GOOD])
-    destination = geo.name(deal.offer.destination) if geo else deal.offer.destination
+    destination = (
+        geo.name(deal.offer.destination, NOTIFICATION_LANG)
+        if geo
+        else deal.offer.destination
+    )
     return f"{icon} {destination} — {money(deal.offer.price, deal.offer.currency)}"

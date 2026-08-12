@@ -78,6 +78,7 @@ class TravelpayoutsProvider:
         marker: str = "",
         timeout: int = 20,
         session: Optional[requests.Session] = None,
+        market: str = "il",
     ) -> None:
         if not token:
             raise ValueError("TRAVELPAYOUTS_TOKEN is required")
@@ -85,6 +86,9 @@ class TravelpayoutsProvider:
         self.currency = currency.lower()
         self.marker = marker
         self.timeout = timeout
+        # Without this the API answers for the Russian market, which is how a
+        # Tel Aviv sweep ended up recommending Ufa and Chelyabinsk.
+        self.market = market.lower()
         self.session = session or requests.Session()
 
     # -- transport ----------------------------------------------------------
@@ -136,7 +140,8 @@ class TravelpayoutsProvider:
 
     def city_directions(self, origin: str) -> Sequence[Offer]:
         payload = self._get(
-            "/v1/city-directions", {"origin": origin.upper(), "currency": self.currency}
+            "/v1/city-directions",
+            {"origin": origin.upper(), "currency": self.currency, "market": self.market},
         )
         data = payload.get("data") or {}
         if not isinstance(data, dict):
@@ -171,6 +176,7 @@ class TravelpayoutsProvider:
             "origin": origin.upper(),
             "destination": destination.upper(),
             "currency": self.currency,
+            "market": self.market,
             "sorting": "price",
             "unique": "false",
             "limit": min(limit, 1000),
@@ -204,6 +210,64 @@ class TravelpayoutsProvider:
 
     # -- mapping ------------------------------------------------------------
 
+    def enrich(self, offers: Sequence[Offer], limit: int = 30) -> list[Offer]:
+        """Fetch a real deep link for offers that arrived without one.
+
+        `city-directions` — the sweep that finds most destinations — returns a
+        price but no `link`, so those fares could only ever point at a generic
+        search. That is precisely the "here is the price, here is nowhere to
+        buy it" failure this service exists to avoid.
+
+        Only the cheapest `limit` linkless offers are enriched: they are the
+        ones that reach the page, and each costs one extra API call.
+        """
+        linkless = sorted(
+            (o for o in offers if not o.deep_link and o.depart_date),
+            key=lambda o: o.price,
+        )[:limit]
+        if not linkless:
+            return list(offers)
+
+        replacements: dict[int, Offer] = {}
+        for offer in linkless:
+            try:
+                found = self.prices_for_dates(
+                    offer.origin,
+                    offer.destination,
+                    departure_at=offer.depart_date.strftime("%Y-%m"),
+                    one_way=offer.return_date is None,
+                    limit=100,
+                )
+            except Exception as exc:
+                logger.debug("enrich failed for %s: %s", offer.route, exc)
+                continue
+
+            match = self._best_match(offer, found)
+            if match is not None:
+                replacements[id(offer)] = match
+
+        if replacements:
+            logger.info("enriched %d/%d offers with a real deep link",
+                        len(replacements), len(linkless))
+        return [replacements.get(id(o), o) for o in offers]
+
+    @staticmethod
+    def _best_match(offer: Offer, candidates: Sequence[Offer]) -> Optional[Offer]:
+        """Pick the candidate that genuinely corresponds to `offer`.
+
+        Preference order: same departure date, then no more expensive than
+        what we already reported. Returning a pricier itinerary would make the
+        page lie about the fare it is linking to.
+        """
+        usable = [c for c in candidates if c.deep_link]
+        if not usable:
+            return None
+
+        same_day = [c for c in usable if c.depart_date == offer.depart_date]
+        pool = same_day or usable
+        cheapest = min(pool, key=lambda c: c.price)
+        return cheapest if cheapest.price <= offer.price * 1.02 else None
+
     def _offer(
         self, origin: str, destination: str, row: dict, observed_at: datetime
     ) -> Optional[Offer]:
@@ -220,6 +284,9 @@ class TravelpayoutsProvider:
             transfers=_as_int(row.get("transfers")),
             airline=row.get("airline") or None,
             deep_link=row.get("link") or None,
+            # Present on some responses, absent on others; when it is there we
+            # can name the actual seller instead of saying "Aviasales".
+            seller=row.get("gate") or row.get("agency") or None,
             source=self.name,
             observed_at=observed_at,
         )

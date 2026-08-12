@@ -5,6 +5,9 @@ few tens of kilobytes, so pushing that to S3 after each scan avoids running a
 web server, a database connection, or a public port on the box that holds the
 price history.
 
+Names are resolved in every site language here rather than in the browser: the
+page must not have to fetch anything when the reader flips the switcher.
+
 `build_payload` is a pure function of the database, so it can be tested
 without touching S3 or the network.
 """
@@ -17,13 +20,14 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from .config import Settings
-from .geo import Geo
+from .geo import SITE_LANGS, Geo
+from .providers.base import comparison_links
 from .providers.travelpayouts import booking_url
 from .storage import Storage
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _clean(value: Any) -> Any:
@@ -38,6 +42,12 @@ def _as_date(value: Any) -> Optional[date]:
         return None
 
 
+def _names(geo: Optional[Geo], code: str) -> dict[str, str]:
+    if geo is None:
+        return {lang: code for lang in SITE_LANGS}
+    return geo.names(code)
+
+
 def build_payload(
     storage: Storage,
     geo: Optional[Geo] = None,
@@ -50,12 +60,13 @@ def build_payload(
     deals = []
     for row in storage.recent_alerts(limit=deal_limit):
         origin, destination = row["origin"], row["destination"]
+        depart, ret = _as_date(row["depart_date"]), _as_date(row["return_date"])
         deals.append(
             {
                 "origin": origin,
                 "destination": destination,
-                "origin_name": geo.name(origin) if geo else origin,
-                "destination_name": geo.name(destination) if geo else destination,
+                "origin_names": _names(geo, origin),
+                "names": _names(geo, destination),
                 "country": geo.country(destination) if geo else "",
                 "price": row["price"],
                 "currency": row["currency"],
@@ -71,17 +82,20 @@ def build_payload(
                 "transfers": row["transfers"],
                 "sent_at": row["sent_at"],
                 "url": _clean(row["url"]),
+                "compare": comparison_links(origin, destination, depart, ret),
             }
         )
 
     current = []
     for row in storage.cheapest_current(limit=80):
         origin, destination = row["origin"], row["destination"]
+        depart, ret = _as_date(row["depart_date"]), _as_date(row["return_date"])
         current.append(
             {
                 "origin": origin,
                 "destination": destination,
-                "destination_name": geo.name(destination) if geo else destination,
+                "origin_names": _names(geo, origin),
+                "names": _names(geo, destination),
                 "country": geo.country(destination) if geo else "",
                 "price": row["price"],
                 "currency": row["currency"],
@@ -90,15 +104,15 @@ def build_payload(
                 "nights": row["trip_nights"],
                 "transfers": row["transfers"],
                 "airline": _clean(row["airline"]),
+                "seller": _clean(row["seller"]),
                 "observed_at": row["observed_at"],
-                "url": booking_url(
-                    origin,
-                    destination,
-                    _as_date(row["depart_date"]),
-                    _as_date(row["return_date"]),
-                    row["deep_link"],
-                    marker,
-                ),
+                # Never null: reconstructed from the route when the API gave
+                # no deep link, because "here is the price" without "here is
+                # where to buy it" is the failure this service exists to avoid.
+                "url": booking_url(origin, destination, depart, ret,
+                                   row["deep_link"], marker),
+                "exact": bool(row["deep_link"]),
+                "compare": comparison_links(origin, destination, depart, ret),
             }
         )
 
@@ -109,7 +123,7 @@ def build_payload(
             {
                 "origin": origin,
                 "destination": destination,
-                "destination_name": geo.name(destination) if geo else destination,
+                "names": _names(geo, destination),
                 "trip_kind": row["trip_kind"],
                 "observations": row["n"],
                 "cheapest": row["cheapest"],
@@ -122,6 +136,7 @@ def build_payload(
         "schema": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "currency": currency,
+        "langs": list(SITE_LANGS),
         "stats": {
             "observations": stats["observations"],
             "routes": stats["routes"],

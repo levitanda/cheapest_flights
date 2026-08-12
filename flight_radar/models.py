@@ -45,6 +45,10 @@ class Offer:
     transfers: Optional[int] = None
     airline: Optional[str] = None
     deep_link: Optional[str] = None
+    # Which agency actually sells this fare. Aviasales is a metasearch across
+    # hundreds of sellers, so "where the price was found" is a real answer we
+    # can surface rather than a generic search link.
+    seller: Optional[str] = None
     source: str = "unknown"
     observed_at: datetime = field(default_factory=_utcnow)
 

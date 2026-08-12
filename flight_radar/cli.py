@@ -11,7 +11,7 @@ from datetime import date, timedelta
 
 from . import watchlist as watchlist_module
 from .config import Settings
-from .geo import Geo
+from .geo import SITE_LANGS, Geo
 from .models import TIER_EXCEPTIONAL, Deal, Offer
 from .notify import build_notifiers
 from .notify.console import ConsoleNotifier
@@ -39,8 +39,9 @@ def _build(settings: Settings) -> tuple[TravelpayoutsProvider, Storage, Geo]:
         currency=settings.currency,
         marker=settings.tp_marker,
         timeout=settings.http_timeout,
+        market=settings.market,
     )
-    return provider, Storage(settings.db_path), Geo(settings.cache_dir)
+    return provider, Storage(settings.db_path), Geo(settings.cache_dir, langs=SITE_LANGS)
 
 
 # -- commands ---------------------------------------------------------------
@@ -181,7 +182,7 @@ def cmd_publish(args: argparse.Namespace, settings: Settings) -> int:
     """Rebuild the site payload from the database and upload it."""
     settings.ensure_dirs()
     storage = Storage(settings.db_path)
-    geo = Geo(settings.cache_dir)
+    geo = Geo(settings.cache_dir, langs=SITE_LANGS)
     payload = build_payload(storage, geo, settings.currency, marker=settings.tp_marker)
 
     if args.stdout:
@@ -209,7 +210,7 @@ def cmd_publish(args: argparse.Namespace, settings: Settings) -> int:
 def cmd_test_notify(args: argparse.Namespace, settings: Settings) -> int:
     """Push one synthetic deal through every configured channel."""
     settings.ensure_dirs()
-    geo = Geo(settings.cache_dir)
+    geo = Geo(settings.cache_dir, langs=SITE_LANGS)
 
     today = date.today()
     offer = Offer(

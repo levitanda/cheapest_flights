@@ -24,7 +24,7 @@ class TestPayload:
     def test_empty_database_still_produces_a_valid_document(self, storage, geo):
         payload = build_payload(storage, geo)
 
-        assert payload["schema"] == 2
+        assert payload["schema"] == 3
         assert payload["deals"] == []
         assert payload["current"] == []
         assert payload["routes"] == []
@@ -37,7 +37,8 @@ class TestPayload:
 
         row = payload["deals"][0]
         assert row["destination"] == "ATH"
-        assert row["destination_name"] == "Афины"
+        assert row["names"]["ru"] == "Афины"
+        assert row["names"]["he"] == "אתונה"
         assert row["country"] == "GR"
         assert row["url"] == "https://example.test/book"
         assert row["depart_date"] == "2026-09-10"
@@ -68,7 +69,7 @@ class TestPayload:
     def test_works_without_geo(self, storage):
         storage.record_alert(deal())
         row = build_payload(storage, None)["deals"][0]
-        assert row["destination_name"] == "ATH"
+        assert row["names"] == {"he": "ATH", "ru": "ATH", "en": "ATH"}
         assert row["country"] == ""
 
 

@@ -49,6 +49,11 @@ class Settings:
     currency: str
     usd_rate: float
     http_timeout: int
+    # Which national market the API prices for. Left unset it defaults to "ru"
+    # server-side, which is why a Tel Aviv sweep used to surface Moscow, Sochi
+    # and Ufa — and quoted prices no Israeli buyer would be offered.
+    market: str
+    enrich_limit: int
 
     # --- storage -----------------------------------------------------------
     data_dir: Path
@@ -105,6 +110,8 @@ class Settings:
             currency=currency,
             usd_rate=_usd_rate(currency),
             http_timeout=_i("HTTP_TIMEOUT", 20),
+            market=os.environ.get("MARKET", "il").lower(),
+            enrich_limit=_i("ENRICH_LIMIT", 30),
             data_dir=data_dir,
             keep_history_days=_i("KEEP_HISTORY_DAYS", 365),
             baseline_window_days=_i("BASELINE_WINDOW_DAYS", 90),

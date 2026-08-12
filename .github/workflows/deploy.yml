@@ -55,13 +55,21 @@ jobs:
           AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
         run: |
           set -euo pipefail
+          # `data/` is excluded on purpose: it belongs to the scanner, and
+          # syncing it from the repo would wipe the latest findings.
+          # No --delete: the bucket also holds the scanner's data/, and a
+          # stale leftover asset is harmless next to that risk.
+          aws s3 sync site/ "s3://$SITE_BUCKET/" \
+            --exclude "data/*" --exclude "*.html" \
+            --cache-control "public, max-age=86400"
+          # HTML gets a short TTL so a copy fix is visible the same day, while
+          # the assets above can sit in the CDN for a day.
           aws s3 cp site/index.html "s3://$SITE_BUCKET/index.html" \
             --content-type "text/html; charset=utf-8" \
             --cache-control "public, max-age=300"
-          # index.html only. data/deals.json belongs to the scanner, and
-          # overwriting it here would wipe the latest findings.
-          aws cloudfront create-invalidation \
-            --distribution-id "$DISTRIBUTION_ID" --paths "/index.html" "/" >/dev/null
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/" "/index.html" "/app.js" "/i18n.js" "/styles.css" \
+                    "/robots.txt" "/sitemap.xml" >/dev/null
           echo "site deployed and CDN invalidated"
 
   scanner:

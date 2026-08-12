@@ -29,6 +29,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check required secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          # Without this the run dies inside ssh-keyscan with an error that
+          # says nothing about the actual cause.
+          missing=""
+          for name in SSH_PRIVATE_KEY SSH_HOST SSH_USER ENV_FILE; do
+            [ -z "$(eval printf '%s' "\"\$$name\"")" ] && missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Set them under Settings -> Secrets and variables -> Actions."
+            echo "See the Deployment section of README.md for what each one holds."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
       - name: Configure ssh
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}

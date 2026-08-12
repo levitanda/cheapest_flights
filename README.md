@@ -184,31 +184,36 @@ EventBridge (rate 3 hours)
 История лежит в **отдельном** бакете от сайта: положи её рядом со статикой —
 и CloudFront отдавал бы базу по прямой ссылке.
 
-### Секреты функции
+### Конфигурация
 
-Токены живут в переменных окружения Lambda, не в репозитории:
+Единственное место, где живут значения, — настройки репозитория на GitHub.
+Руками в консоль AWS ничего вводить не нужно: каждый деплой синхронизирует
+переменные окружения функции из секретов и переменных репозитория
+(`deploy/sync_lambda_env.py`).
 
-```bash
-aws lambda update-function-configuration \
-  --function-name flight-radar-scan --region eu-central-1 \
-  --environment 'Variables={
-      DATA_DIR=/tmp/flight-radar,
-      STATE_BUCKET=flight-radar-state-654654296346,
-      STATE_PREFIX=state,
-      SITE_BUCKET=isr-cheap-flight-site-654654296346,
-      SITE_DATA_KEY=data/deals.json,
-      CURRENCY=usd,
-      TRAVELPAYOUTS_TOKEN=ваш_токен,
-      TELEGRAM_BOT_TOKEN=ваш_бот,
-      TELEGRAM_CHAT_ID=ваш_id}'
-```
+Settings → Secrets and variables → Actions → **Secrets**:
 
-Расписание создано **выключенным** — включённое без токена оно просто падало бы
-восемь раз в сутки. После настройки токенов:
+| Секрет | |
+|---|---|
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | ключи `flight-radar-site-deployer` |
+| `TRAVELPAYOUTS_TOKEN` | обязателен, без него деплой падает |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | необязательны |
+| `PUSHOVER_APP_TOKEN`, `PUSHOVER_USER_KEY` | необязательны |
+| `TRAVELPAYOUTS_MARKER` | партнёрский маркер, необязателен |
 
-```bash
-aws events enable-rule --name flight-radar-schedule --region eu-central-1
-```
+Вкладка **Variables** — для несекретной настройки чувствительности:
+`MIN_Z_SCORE`, `MIN_DROP_PCT`, `MAX_ALERTS_PER_SCAN`, `CURRENCY` и остальные из
+таблицы выше. Незаданная переменная не отправляется вовсе, чтобы не затереть
+дефолт из `config.py` пустой строкой.
+
+Две тонкости, ради которых синхронизация — отдельный скрипт, а не строчка в
+YAML. `update-function-configuration` **заменяет** весь набор переменных, а не
+дополняет его, поэтому отправляется полный набор — иначе имена бакетов
+обнулились бы. И шорткат AWS CLI `Variables={k=v,...}` режет значения по
+запятым и знакам равенства, так что скрипт формирует настоящий JSON.
+
+Расписание было создано выключенным. CI включает его сам, как только появился
+`TRAVELPAYOUTS_TOKEN`.
 
 ### CI
 
@@ -216,10 +221,6 @@ aws events enable-rule --name flight-radar-schedule --region eu-central-1
 выкладывает сайт и пересобирает функцию. `update-function-code` возвращает
 успех даже для пакета, который не импортируется, поэтому после выкладки
 воркфлоу один раз вызывает функцию и валит деплой на `ImportModuleError`.
-
-Секреты репозитория: `AWS_ACCESS_KEY_ID` и `AWS_SECRET_ACCESS_KEY` от
-пользователя `flight-radar-site-deployer` — он умеет только положить
-`index.html`, обновить код функции и сбросить кэш CDN.
 
 ### Локально и на своём сервере
 

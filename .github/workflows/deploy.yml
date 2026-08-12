@@ -15,7 +15,9 @@ env:
   AWS_REGION: eu-central-1
   FUNCTION_NAME: flight-radar-scan
   SITE_BUCKET: isr-cheap-flight-site-654654296346
+  STATE_BUCKET: flight-radar-state-654654296346
   DISTRIBUTION_ID: EWANFAR53TRLY
+  SCHEDULE_RULE: flight-radar-schedule
 
 jobs:
   test:
@@ -97,6 +99,53 @@ jobs:
             --publish >/dev/null
           aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
           echo "function code updated"
+
+      - name: Sync configuration from repository secrets
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          STATE_BUCKET: ${{ env.STATE_BUCKET }}
+          # Secrets
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          # Non-secret tuning, set as repository *variables*
+          CURRENCY: ${{ vars.CURRENCY }}
+          USD_RATE: ${{ vars.USD_RATE }}
+          BASELINE_WINDOW_DAYS: ${{ vars.BASELINE_WINDOW_DAYS }}
+          MIN_OBSERVATIONS: ${{ vars.MIN_OBSERVATIONS }}
+          MIN_DISTINCT_DAYS: ${{ vars.MIN_DISTINCT_DAYS }}
+          MIN_DROP_PCT: ${{ vars.MIN_DROP_PCT }}
+          MIN_Z_SCORE: ${{ vars.MIN_Z_SCORE }}
+          COLD_START_RATIO: ${{ vars.COLD_START_RATIO }}
+          ERROR_FARE_DROP_PCT: ${{ vars.ERROR_FARE_DROP_PCT }}
+          ALERT_COOLDOWN_HOURS: ${{ vars.ALERT_COOLDOWN_HOURS }}
+          ALERT_IMPROVE_PCT: ${{ vars.ALERT_IMPROVE_PCT }}
+          MAX_ALERTS_PER_SCAN: ${{ vars.MAX_ALERTS_PER_SCAN }}
+          KEEP_HISTORY_DAYS: ${{ vars.KEEP_HISTORY_DAYS }}
+        run: python deploy/sync_lambda_env.py
+
+      - name: Enable the schedule
+        if: ${{ secrets.TRAVELPAYOUTS_TOKEN != '' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          # Only once a token exists — an enabled schedule without one would
+          # just fail eight times a day.
+          state=$(aws events describe-rule --name "$SCHEDULE_RULE" --query State --output text)
+          if [ "$state" != "ENABLED" ]; then
+            aws events enable-rule --name "$SCHEDULE_RULE"
+            echo "schedule enabled"
+          else
+            echo "schedule already enabled"
+          fi
 
       - name: Verify the new code actually loads
         env:

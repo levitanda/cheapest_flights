@@ -129,8 +129,12 @@ jobs:
           KEEP_HISTORY_DAYS: ${{ vars.KEEP_HISTORY_DAYS }}
         run: python deploy/sync_lambda_env.py
 
+      # No `if:` guard here on purpose. The `secrets` context is not available
+      # in step conditions — referencing it fails the whole workflow at parse
+      # time, before any job starts. It is also unnecessary: the sync step
+      # above aborts the job when the token is missing, so reaching this point
+      # already means there is one.
       - name: Enable the schedule
-        if: ${{ secrets.TRAVELPAYOUTS_TOKEN != '' }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

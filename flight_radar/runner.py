@@ -19,7 +19,7 @@ from .models import Deal, Offer
 from .notify import Notifier
 from .providers.base import PriceProvider
 from .storage import Storage
-from .watchlist import MODE_TRACK, WatchEntry
+from .watchlist import MODE_LATEST, MODE_TRACK, WatchEntry
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,9 @@ def collect_offers(
     """Fetch everything one watchlist entry asks for, filtered by its rules."""
     raw: list[Offer] = []
     try:
-        if entry.mode == MODE_TRACK and entry.destination:
+        if entry.mode == MODE_LATEST:
+            raw.extend(provider.latest_prices(entry.origin))
+        elif entry.mode == MODE_TRACK and entry.destination:
             for month in entry.months():
                 raw.extend(
                     provider.prices_for_dates(

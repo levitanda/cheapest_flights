@@ -195,12 +195,13 @@ function apply() {
   if (sort === "price" || sort === "recent") current.sort((a, b) => a.price - b.price);
 
   const fareBox = document.getElementById("current");
-  if (!current.length) {
-    fareBox.replaceChildren(
-      el("div", "empty", (PAYLOAD.current || []).length ? T.nothingMatches : T.noPricesYet)
-    );
-  } else {
+  if (current.length) {
     fareBox.replaceChildren(...current.map(fareNode));
+  } else if (!(PAYLOAD.current || []).length) {
+    fareBox.replaceChildren(el("div", "empty", T.noPricesYet));
+  } else {
+    const place = resolveQueryPlace(tokens);
+    fareBox.replaceChildren(place ? unpricedNode(place) : el("div", "empty", T.nothingMatches));
   }
 }
 
@@ -254,19 +255,22 @@ function renderRoutes() {
   }));
 }
 
+function placeLabel(code, names) {
+  const label = names && (names[LANG] || names.en);
+  return label && label !== code ? label + " (" + code + ")" : code;
+}
+
 function fillSuggestions() {
-  // Every place the radar knows, not only those on sale — otherwise a route
-  // you watch looks unsearchable until it happens to be discounted.
+  // Suggest every destination we know of, not only those currently priced —
+  // otherwise typing a real city returns a blank page and reads as a broken
+  // search rather than as missing data.
   const seen = new Map();
-  const add = (code, names) => {
-    if (!code || seen.has(code)) return;
-    const label = names && (names[LANG] || names.en);
-    seen.set(code, label && label !== code ? label + " (" + code + ")" : code);
-  };
+  Object.entries(PAYLOAD.places || {}).forEach(([code, names]) =>
+    seen.set(code, placeLabel(code, names)));
   ["deals", "current", "routes"].forEach((key) =>
     (PAYLOAD[key] || []).forEach((item) => {
-      add(item.destination, item.names);
-      add(item.origin, item.origin_names);
+      if (!seen.has(item.destination)) seen.set(item.destination, placeLabel(item.destination, item.names));
+      if (!seen.has(item.origin)) seen.set(item.origin, placeLabel(item.origin, item.origin_names));
     }));
 
   document.getElementById("places").replaceChildren(
@@ -276,6 +280,48 @@ function fillSuggestions() {
       return o;
     })
   );
+}
+
+/* When the query names a place we know but have no fare for, offer to search
+ * it directly rather than showing an empty page. The long tail can never be
+ * fully scanned, so this is the permanent answer for it, not a stopgap. */
+function resolveQueryPlace(tokens) {
+  if (!tokens.length) return null;
+  const places = PAYLOAD.places || {};
+  for (const [code, names] of Object.entries(places)) {
+    const hay = [code, ...Object.values(names || {})].join(" ").toLowerCase();
+    if (tokens.every((t) => hay.includes(t))) return { code, names };
+  }
+  return null;
+}
+
+function unpricedNode(place) {
+  const origin = (PAYLOAD.current || [])[0]?.origin || "TLV";
+  const box = el("div", "empty");
+  box.append(el("div", null, T.noPriceFor.replace("{place}", placeLabel(place.code, place.names))));
+
+  const links = el("div", "compare");
+  links.style.justifyContent = "center";
+  links.style.marginTop = "10px";
+  const searches = [
+    ["Aviasales", "https://www.aviasales.com/search/" + origin + place.code + "1"],
+    ["Skyscanner", "https://www.skyscanner.co.il/transport/flights/"
+      + origin.toLowerCase() + "/" + place.code.toLowerCase()
+      + "/?adults=1&currency=USD&locale=he-IL&market=IL"],
+    ["Google Flights", "https://www.google.com/travel/flights?q="
+      + encodeURIComponent("Flights from " + origin + " to " + place.code)
+      + "&hl=iw&gl=IL"],
+  ];
+  links.append(el("span", "label", T.searchItOn));
+  searches.forEach(([label, href]) => {
+    const a = el("a", null, label);
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener nofollow";
+    links.append(a);
+  });
+  box.append(links);
+  return box;
 }
 
 function applyLanguage() {

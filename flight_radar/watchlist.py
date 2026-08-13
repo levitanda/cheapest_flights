@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 MODE_DISCOVER = "discover"
 MODE_TRACK = "track"
+# Broader than `discover`: one call, but the raw recent finds rather than only
+# the destinations with a cached cheapest fare. `discover` from Tel Aviv
+# returned 29 destinations and no Amsterdam.
+MODE_LATEST = "latest"
+MODES = (MODE_DISCOVER, MODE_TRACK, MODE_LATEST)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +95,7 @@ def _entry_from_dict(raw: dict, defaults: dict) -> Optional[WatchEntry]:
 
     destination = merged.get("destination")
     mode = str(merged.get("mode") or (MODE_TRACK if destination else MODE_DISCOVER)).lower()
-    if mode not in (MODE_DISCOVER, MODE_TRACK):
+    if mode not in MODES:
         logger.warning("unknown mode %r for %s, treating as discover", mode, origin)
         mode = MODE_DISCOVER
     if mode == MODE_TRACK and not destination:

@@ -7,6 +7,16 @@
 [defaults]
 max_nights = 21
 
+# The broad sweep. `discover` only answers for destinations with a cached
+# cheapest fare — from TLV that was 29 of them, with no Amsterdam, London or
+# Barcelona. `latest` returns the raw recent finds instead, for the same one
+# request.
+[[watch]]
+origin = "TLV"
+mode = "latest"
+
+# Kept alongside: the two endpoints do not return identical sets, and the
+# union is better coverage than either.
 [[watch]]
 origin = "TLV"
 mode = "discover"

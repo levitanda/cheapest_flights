@@ -48,6 +48,26 @@ def _names(geo: Optional[Geo], code: str) -> dict[str, str]:
     return geo.names(code)
 
 
+def _places_index(geo: Optional[Geo], *sections) -> dict[str, dict[str, str]]:
+    """Searchable destinations: the curated list plus whatever we have priced.
+
+    Keyed by IATA so the page can turn a typed city into a route and offer a
+    search link even when no fare has been collected for it.
+    """
+    codes: set[str] = set()
+    if geo is not None:
+        from .geo import _load_overrides
+
+        for mapping in _load_overrides().values():
+            codes.update(mapping)
+    for section in sections:
+        for item in section:
+            codes.add(item["destination"])
+            codes.add(item["origin"])
+
+    return {code: _names(geo, code) for code in sorted(codes)}
+
+
 def build_payload(
     storage: Storage,
     geo: Optional[Geo] = None,
@@ -137,6 +157,11 @@ def build_payload(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "currency": currency,
         "langs": list(SITE_LANGS),
+        # Every destination worth searching for, priced or not. Without this a
+        # reader typing "אמסטרדם" gets a blank page whenever the scanner has
+        # not happened to see that route yet — which reads as a broken search
+        # rather than as missing data.
+        "places": _places_index(geo, current, deals),
         "stats": {
             "observations": stats["observations"],
             "routes": stats["routes"],

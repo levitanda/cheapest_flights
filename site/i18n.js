@@ -38,6 +38,8 @@ const I18N = {
       "עדיין אין מחירים חריגים. המערכת צריכה היסטוריה של כמה ימים כדי להבדיל בין הנחה למחיר רגיל — בינתיים ראו את המחירים הזולים ביותר כרגע.",
     nothingMatches: "לא נמצא דבר בסינון הזה.",
     noPricesYet: "המערכת עדיין לא אספה מחירים.",
+    noPriceFor: "עדיין לא נאסף מחיר ל־{place}. אפשר לחפש ישירות:",
+    searchItOn: "חיפוש ב־",
 
     currentHeading: "הזול ביותר כרגע",
     currentHint:
@@ -107,6 +109,8 @@ const I18N = {
       "Аномально низких цен пока нет. Детектору нужна история за несколько дней, чтобы отличить скидку от обычной цены — а пока смотрите текущие лучшие цены ниже.",
     nothingMatches: "Ничего не найдено по этому фильтру.",
     noPricesYet: "Сканер ещё не собрал ни одной цены.",
+    noPriceFor: "Цену на {place} мы ещё не собрали. Можно искать напрямую:",
+    searchItOn: "Искать на",
 
     currentHeading: "Самые дешёвые сейчас",
     currentHint:
@@ -176,6 +180,8 @@ const I18N = {
       "No abnormal fares yet. The detector needs a few days of history before it can tell a discount from a normal price — meanwhile, see the cheapest fares right now below.",
     nothingMatches: "Nothing matches this filter.",
     noPricesYet: "No prices collected yet.",
+    noPriceFor: "No fare collected for {place} yet. Search it directly:",
+    searchItOn: "Search on",
 
     currentHeading: "Cheapest right now",
     currentHint:

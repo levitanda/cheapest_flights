@@ -162,6 +162,47 @@ class TravelpayoutsProvider:
                 offers.append(offer)
         return offers
 
+    def latest_prices(self, origin: str, limit: int = 1000) -> Sequence[Offer]:
+        """Every route the API has recently seen from `origin`, in one call.
+
+        `city-directions` only answers for destinations it holds a cached
+        cheapest fare for — from Tel Aviv that was 29 of them, missing
+        Amsterdam, London, Barcelona and most of western Europe. This endpoint
+        returns the raw recent finds instead, which is far broader coverage
+        for the same single request.
+        """
+        payload = self._get(
+            "/v2/prices/latest",
+            {
+                "origin": origin.upper(),
+                "currency": self.currency,
+                "market": self.market,
+                "period_type": "year",
+                "one_way": "false",
+                "show_to_affiliates": "true",
+                "sorting": "price",
+                "limit": min(limit, 1000),
+            },
+        )
+        rows = payload.get("data") or []
+        if not isinstance(rows, list):
+            return []
+
+        now = datetime.now(timezone.utc)
+        offers = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            offer = self._offer(
+                origin=row.get("origin") or origin,
+                destination=row.get("destination") or "",
+                row=row,
+                observed_at=now,
+            )
+            if offer and offer.destination:
+                offers.append(offer)
+        return offers
+
     def prices_for_dates(
         self,
         origin: str,
@@ -279,9 +320,17 @@ class TravelpayoutsProvider:
             destination=str(destination),
             price=price,
             currency=str(row.get("currency") or self.currency),
-            depart_date=_parse_date(row.get("departure_at") or row.get("depart_date")),
-            return_date=_parse_date(row.get("return_at") or row.get("return_date")),
-            transfers=_as_int(row.get("transfers")),
+            depart_date=_parse_date(
+                row.get("departure_at") or row.get("depart_date")
+            ),
+            return_date=_parse_date(
+                row.get("return_at") or row.get("return_date")
+            ),
+            transfers=_as_int(
+                row.get("transfers")
+                if row.get("transfers") is not None
+                else row.get("number_of_changes")
+            ),
             airline=row.get("airline") or None,
             deep_link=row.get("link") or None,
             # Present on some responses, absent on others; when it is there we

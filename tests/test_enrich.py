@@ -81,13 +81,36 @@ def test_candidates_without_links_are_ignored():
 
 def test_only_the_cheapest_offers_are_enriched():
     """Each enrichment costs an API call, so it is spent on what reaches the
-    page rather than on all ~290 results."""
+    page rather than on all ~690 results."""
     provider = StubProvider({})
     offers = [offer(destination=f"D{i:02d}", price=float(100 + i)) for i in range(10)]
 
     provider.enrich(offers, limit=3)
     assert len(provider.calls) == 3
     assert [c[1] for c in provider.calls] == ["D00", "D01", "D02"]
+
+
+def test_budget_is_spent_per_destination_not_per_offer():
+    """The broad sweep clusters hundreds of fares on a few popular routes.
+    Picking the globally cheapest N would resolve Larnaca a dozen times and
+    leave Amsterdam pointing at a search."""
+    provider = StubProvider({})
+    offers = (
+        [offer(destination="LCA", price=float(50 + i)) for i in range(12)]
+        + [offer(destination="AMS", price=230.0)]
+    )
+
+    provider.enrich(offers, limit=5)
+
+    assert sorted(c[1] for c in provider.calls) == ["AMS", "LCA"]
+
+
+def test_the_cheapest_fare_of_a_route_is_the_one_resolved():
+    provider = StubProvider({})
+    provider.enrich([offer(destination="LCA", price=180.0),
+                     offer(destination="LCA", price=48.0)], limit=5)
+
+    assert len(provider.calls) == 1
 
 
 def test_a_failing_lookup_does_not_lose_the_offer():

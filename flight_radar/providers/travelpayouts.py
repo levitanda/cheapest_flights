@@ -259,13 +259,21 @@ class TravelpayoutsProvider:
         search. That is precisely the "here is the price, here is nowhere to
         buy it" failure this service exists to avoid.
 
-        Only the cheapest `limit` linkless offers are enriched: they are the
-        ones that reach the page, and each costs one extra API call.
+        One call per destination, not per offer. The broad sweep returns
+        hundreds of fares clustered on a few popular routes, so picking the
+        globally cheapest N would spend the whole budget resolving Larnaca
+        twelve times while Amsterdam kept pointing at a search.
         """
-        linkless = sorted(
-            (o for o in offers if not o.deep_link and o.depart_date),
-            key=lambda o: o.price,
-        )[:limit]
+        best_per_route: dict[tuple[str, str, str], Offer] = {}
+        for offer in offers:
+            if offer.deep_link or not offer.depart_date:
+                continue
+            key = (offer.origin, offer.destination, offer.trip_kind)
+            current = best_per_route.get(key)
+            if current is None or offer.price < current.price:
+                best_per_route[key] = offer
+
+        linkless = sorted(best_per_route.values(), key=lambda o: o.price)[:limit]
         if not linkless:
             return list(offers)
 

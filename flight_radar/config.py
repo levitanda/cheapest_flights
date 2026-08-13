@@ -111,7 +111,9 @@ class Settings:
             usd_rate=_usd_rate(currency),
             http_timeout=_i("HTTP_TIMEOUT", 20),
             market=os.environ.get("MARKET", "il").lower(),
-            enrich_limit=_i("ENRICH_LIMIT", 30),
+            # One API call each, ~0.2s apiece, against a 300s timeout — and
+            # the page shows up to 80 destinations, so cover all of them.
+            enrich_limit=_i("ENRICH_LIMIT", 90),
             data_dir=data_dir,
             keep_history_days=_i("KEEP_HISTORY_DAYS", 365),
             baseline_window_days=_i("BASELINE_WINDOW_DAYS", 90),

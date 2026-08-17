@@ -24,7 +24,7 @@ class TestPayload:
     def test_empty_database_still_produces_a_valid_document(self, storage, geo):
         payload = build_payload(storage, geo)
 
-        assert payload["schema"] == 3
+        assert payload["schema"] == 4
         assert payload["deals"] == []
         assert payload["current"] == []
         assert payload["routes"] == []

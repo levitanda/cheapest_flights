@@ -60,7 +60,7 @@ def cmd_scan(args: argparse.Namespace, settings: Settings) -> int:
     for error in report.errors:
         print(f"  ! {error}")
 
-    removed = storage.prune(settings.keep_history_days)
+    removed = storage.prune(settings.keep_history_days, settings.keep_rollup_days)
     if removed:
         logger.info("pruned %d observations older than %d days", removed, settings.keep_history_days)
 

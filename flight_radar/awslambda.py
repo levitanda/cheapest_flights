@@ -71,7 +71,7 @@ def handler(event, context):  # noqa: ARG001 - Lambda signature
 
     report = run_scan(settings, provider, storage, entries, notifiers, geo=geo)
 
-    removed = storage.prune(settings.keep_history_days)
+    removed = storage.prune(settings.keep_history_days, settings.keep_rollup_days)
     if removed:
         logger.info("pruned %d stale observations", removed)
 

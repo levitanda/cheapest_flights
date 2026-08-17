@@ -8,6 +8,8 @@
 const DATA_URL = "data/deals.json";
 const SYMBOL = { usd: "$", eur: "€", ils: "₪", gbp: "£", rub: "₽" };
 
+const BUDGET_MAX = 1000;
+
 let LANG = pickLang();
 let T = I18N[LANG];
 let PAYLOAD = null;
@@ -145,21 +147,70 @@ function fareNode(f) {
   node.append(el("div", "sub", bits.join(" · ")));
   if (f.seller) node.append(el("div", "sub", T.seller + " " + f.seller));
 
+  const series = (PAYLOAD.history || {})[`${f.origin}-${f.destination}`];
+  if (series && (series.prices || []).length >= 3) {
+    const spark = sparkline(series.prices);
+    spark.classList.add("spark");
+    top.querySelector(".amount").prepend(spark);
+  }
+
   node.append(buyRow(f, Boolean(f.exact)));
   return node;
 }
 
 /* ---------- filtering ---------- */
 
-function matches(item, tokens, directOnly) {
-  if (directOnly && item.transfers !== 0) return false;
-  if (!tokens.length) return true;
+function monthName(month, short) {
+  const d = new Date(month + "-01T00:00:00Z");
+  return new Intl.DateTimeFormat(T.locale, {
+    month: short ? "short" : "long", year: short ? undefined : "numeric",
+    timeZone: "UTC",
+  }).format(d);
+}
+
+function countryName(code) {
+  if (!code) return code;
+  try {
+    return new Intl.DisplayNames([T.locale], { type: "region" }).of(code) || code;
+  } catch {
+    return code;   // older engines, or a code Intl does not know
+  }
+}
+
+function filters() {
+  return {
+    tokens: currentTokens(),
+    country: document.getElementById("country").value,
+    directOnly: document.getElementById("direct").checked,
+    from: document.getElementById("from").value,
+    to: document.getElementById("to").value,
+    budget: Number(document.getElementById("budget").value),
+  };
+}
+
+function withinDates(item, from, to) {
+  // Both legs must sit inside the window. A fare that departs inside it and
+  // returns three weeks later is not a trip you can take on those dates.
+  if (from && (!item.depart_date || item.depart_date < from)) return false;
+  if (to) {
+    const back = item.return_date || item.depart_date;
+    if (!back || back > to) return false;
+  }
+  return true;
+}
+
+function matches(item, f) {
+  if (f.directOnly && item.transfers !== 0) return false;
+  if (f.country && item.country !== f.country) return false;
+  if (f.budget < BUDGET_MAX && item.price > f.budget) return false;
+  if (!withinDates(item, f.from, f.to)) return false;
+  if (!f.tokens.length) return true;
   const hay = [
-    item.destination, item.origin, item.country,
+    item.destination, item.origin, item.country, countryName(item.country),
     ...Object.values(item.names || {}),
     ...Object.values(item.origin_names || {}),
   ].filter(Boolean).join(" ").toLowerCase();
-  return tokens.every((t) => hay.includes(t));
+  return f.tokens.every((t) => hay.includes(t));
 }
 
 function currentTokens() {
@@ -170,13 +221,13 @@ function currentTokens() {
 
 function apply() {
   if (!PAYLOAD) return;
-  const tokens = currentTokens();
+  const f = filters();
+  const tokens = f.tokens;
   const tier = document.getElementById("tier").value;
   const sort = document.getElementById("sort").value;
-  const directOnly = document.getElementById("direct").checked;
 
   let deals = (PAYLOAD.deals || []).filter(
-    (d) => (!tier || d.tier === tier) && matches(d, tokens, directOnly)
+    (d) => (!tier || d.tier === tier) && matches(d, f)
   );
   if (sort === "discount") deals.sort((a, b) => b.drop_pct - a.drop_pct);
   else if (sort === "price") deals.sort((a, b) => a.price - b.price);
@@ -191,18 +242,158 @@ function apply() {
     dealBox.replaceChildren(...deals.map(dealNode));
   }
 
-  let current = (PAYLOAD.current || []).filter((f) => matches(f, tokens, directOnly));
-  if (sort === "price" || sort === "recent") current.sort((a, b) => a.price - b.price);
+  // With dates or a budget set, the month-level fares are the useful pool:
+  // "cheapest right now" holds one date per route and would filter to nothing.
+  const narrowed = Boolean(f.from || f.to || f.budget < BUDGET_MAX);
+  const pool = narrowed ? (PAYLOAD.fares || []) : (PAYLOAD.current || []);
+  let current = pool.filter((item) => matches(item, f));
+
+  if (narrowed) current = cheapestPerDestination(current);
+  current.sort((a, b) => a.price - b.price);
 
   const fareBox = document.getElementById("current");
   if (current.length) {
     fareBox.replaceChildren(...current.map(fareNode));
   } else if (!(PAYLOAD.current || []).length) {
     fareBox.replaceChildren(el("div", "empty", T.noPricesYet));
+  } else if (narrowed) {
+    fareBox.replaceChildren(el("div", "empty", T.noDataForFilter));
   } else {
     const place = resolveQueryPlace(tokens);
     fareBox.replaceChildren(place ? unpricedNode(place) : el("div", "empty", T.nothingMatches));
   }
+
+  renderFocus(tokens, f);
+}
+
+function cheapestPerDestination(items) {
+  const best = new Map();
+  items.forEach((item) => {
+    const seen = best.get(item.destination);
+    if (!seen || item.price < seen.price) best.set(item.destination, item);
+  });
+  return [...best.values()];
+}
+
+/* ---------- charts ---------- */
+
+const chartOpts = () => ({
+  money: (v) => money(v, PAYLOAD.currency || "usd"),
+  monthLabel: monthName,
+  dateLabel: (iso) => shortDate(iso) || iso,
+  nameOf: (code) => {
+    const names = (PAYLOAD.places || {})[code];
+    return (names && (names[LANG] || names.en)) || code;
+  },
+});
+
+/** Which destination the charts should describe: an explicit country pick, a
+ *  search that resolves to one place, or nothing. */
+function focusTarget(tokens, f) {
+  if (f.country) return { kind: "country", code: f.country, label: countryName(f.country) };
+  const place = tokens.length ? resolveQueryPlace(tokens) : null;
+  if (place && (PAYLOAD.fares || []).some((x) => x.destination === place.code)) {
+    return { kind: "place", code: place.code, label: placeLabel(place.code, place.names) };
+  }
+  return null;
+}
+
+function renderFocus(tokens, f) {
+  const section = document.getElementById("focus");
+  const target = focusTarget(tokens, f);
+  if (!target) { section.hidden = true; return; }
+
+  const relevant = (PAYLOAD.fares || []).filter((x) =>
+    target.kind === "country" ? x.country === target.code : x.destination === target.code);
+  if (!relevant.length) { section.hidden = true; return; }
+
+  section.hidden = false;
+  document.getElementById("focus-head").textContent =
+    T.focusHeading.replace("{place}", target.label);
+
+  // Cheapest per month across whatever the target covers.
+  const byMonth = new Map();
+  relevant.forEach((x) => {
+    const seen = byMonth.get(x.month);
+    if (seen == null || x.price < seen) byMonth.set(x.month, x.price);
+  });
+  const rows = [...byMonth.entries()].sort().map(([month, price]) => ({ month, price }));
+
+  const opts = chartOpts();
+  document.getElementById("month-chart").replaceChildren(
+    monthChart(rows, {
+      ...opts,
+      title: T.monthChartTitle,
+      cheapestLabel: (month, price) =>
+        T.cheapestMonth.replace("{month}", month).replace("{price}", price),
+    })
+  );
+
+  document.getElementById("history-head").textContent = T.historyHeading;
+  const series = target.kind === "place"
+    ? (PAYLOAD.history || {})[`${relevant[0].origin}-${target.code}`]
+    : null;
+  const box = document.getElementById("history-chart");
+  const note = document.getElementById("history-note");
+
+  if (series && (series.prices || []).length >= 2) {
+    box.replaceChildren(historyChart(series, { ...opts, title: T.historyHeading }));
+    note.textContent = "";
+  } else {
+    // Better an honest sentence than a line drawn through two points.
+    box.replaceChildren();
+    const since = series ? series.days[0] : (PAYLOAD.stats || {}).first_seen;
+    note.textContent = T.historyTooShort.replace(
+      "{date}", since ? (shortDate(since) || since.slice(0, 10)) : "—");
+  }
+}
+
+function renderHeatmap() {
+  document.getElementById("heatmap-head").textContent = T.heatmapHeading;
+  document.getElementById("heatmap-hint").textContent = T.heatmapHint;
+
+  const fares = PAYLOAD.fares || [];
+  if (!fares.length) return;
+
+  const months = [...new Set(fares.map((x) => x.month))].sort().slice(0, 12);
+  const cheapest = new Map();
+  fares.forEach((x) => {
+    const seen = cheapest.get(x.destination);
+    if (seen == null || x.price < seen) cheapest.set(x.destination, x.price);
+  });
+  const destinations = [...cheapest.entries()]
+    .sort((a, b) => a[1] - b[1]).slice(0, 15).map(([code]) => code);
+
+  const lookup = new Map();
+  fares.forEach((x) => {
+    const key = x.destination + "|" + x.month;
+    const seen = lookup.get(key);
+    if (seen == null || x.price < seen) lookup.set(key, x.price);
+  });
+
+  document.getElementById("heatmap").replaceChildren(
+    heatmap(destinations, months,
+      (dest, month) => lookup.get(dest + "|" + month) ?? null,
+      { ...chartOpts(), title: T.heatmapHeading })
+  );
+}
+
+function fillCountries() {
+  const select = document.getElementById("country");
+  const codes = [...new Set(
+    [...(PAYLOAD.current || []), ...(PAYLOAD.fares || [])]
+      .map((x) => x.country).filter(Boolean)
+  )];
+  const options = codes
+    .map((code) => ({ code, label: countryName(code) }))
+    .sort((a, b) => a.label.localeCompare(b.label, T.locale));
+
+  const previous = select.value;
+  select.replaceChildren(
+    new Option(T.allCountries, ""),
+    ...options.map((o) => new Option(o.label, o.code))
+  );
+  select.value = previous;
 }
 
 /* ---------- static sections ---------- */
@@ -343,6 +534,11 @@ function applyLanguage() {
   const q = document.getElementById("q");
   q.placeholder = T.searchPlaceholder;
   document.getElementById("direct-label").textContent = T.directOnly;
+  document.getElementById("from-label").textContent = T.dateFrom;
+  document.getElementById("to-label").textContent = T.dateTo;
+  document.getElementById("budget-label").textContent = T.budget;
+  document.getElementById("reset").textContent = T.reset;
+  updateBudgetLabel();
 
   const tier = document.getElementById("tier");
   const tierValue = tier.value;
@@ -370,6 +566,8 @@ function applyLanguage() {
     renderStats();
     renderRoutes();
     fillSuggestions();
+    fillCountries();
+    renderHeatmap();
     apply();
   }
 }
@@ -384,6 +582,12 @@ function switchTo(lang) {
   applyLanguage();
 }
 
+function updateBudgetLabel() {
+  const value = Number(document.getElementById("budget").value);
+  document.getElementById("budget-value").textContent =
+    value >= BUDGET_MAX ? T.anyBudget : money(value, (PAYLOAD && PAYLOAD.currency) || "usd");
+}
+
 /* ---------- boot ---------- */
 
 function boot() {
@@ -391,8 +595,21 @@ function boot() {
     b.textContent = I18N[b.dataset.lang].label;
     b.addEventListener("click", () => switchTo(b.dataset.lang));
   });
-  ["q", "tier", "sort", "direct"].forEach((id) =>
-    document.getElementById(id).addEventListener("input", apply));
+  ["q", "tier", "sort", "direct", "country", "from", "to", "budget"].forEach((id) =>
+    document.getElementById(id).addEventListener("input", () => {
+      updateBudgetLabel();
+      apply();
+    }));
+
+  document.getElementById("reset").addEventListener("click", () => {
+    ["q", "from", "to"].forEach((id) => { document.getElementById(id).value = ""; });
+    document.getElementById("country").value = "";
+    document.getElementById("tier").value = "";
+    document.getElementById("direct").checked = false;
+    document.getElementById("budget").value = String(BUDGET_MAX);
+    updateBudgetLabel();
+    apply();
+  });
 
   applyLanguage();
 

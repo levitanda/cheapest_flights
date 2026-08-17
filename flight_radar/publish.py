@@ -27,7 +27,7 @@ from .storage import Storage
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _clean(value: Any) -> Any:
@@ -136,6 +136,47 @@ def build_payload(
             }
         )
 
+    # One fare per route per departure month: what makes date filtering and
+    # the "when to fly" chart possible at all.
+    fares = []
+    for row in storage.month_fares():
+        origin, destination = row["origin"], row["destination"]
+        depart, ret = _as_date(row["depart_date"]), _as_date(row["return_date"])
+        fares.append(
+            {
+                "origin": origin,
+                "destination": destination,
+                "names": _names(geo, destination),
+                "country": geo.country(destination) if geo else "",
+                "month": row["depart_month"],
+                "price": row["min_price"],
+                "avg": row["avg_price"],
+                "currency": row["currency"],
+                "trip_kind": row["trip_kind"],
+                "depart_date": _clean(row["depart_date"]),
+                "return_date": _clean(row["return_date"]),
+                "transfers": row["transfers"],
+                "airline": _clean(row["airline"]),
+                "seller": _clean(row["seller"]),
+                "url": booking_url(origin, destination, depart, ret,
+                                   row["deep_link"], marker),
+                "exact": bool(row["deep_link"]),
+            }
+        )
+
+    # Series only for the routes on the page. Stored as a start date plus a
+    # dense array rather than dated objects — same information, a fraction of
+    # the bytes once this spans months.
+    shown = [(c["origin"], c["destination"], "rt") for c in current[:80]]
+    history = {}
+    for (origin, destination, _kind), rows in storage.price_history(shown).items():
+        days = [r["day"] for r in rows]
+        history[f"{origin}-{destination}"] = {
+            "from": days[0],
+            "days": days,
+            "prices": [round(r["min_price"], 2) for r in rows],
+        }
+
     routes = []
     for row in storage.top_routes(limit=60):
         origin, destination = row["origin"], row["destination"]
@@ -170,6 +211,8 @@ def build_payload(
         },
         "deals": deals,
         "current": current,
+        "fares": fares,
+        "history": history,
         "routes": routes,
     }
 

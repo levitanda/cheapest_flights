@@ -62,6 +62,45 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alert_route
     ON alerts (origin, destination, trip_kind, depart_month, sent_at);
+
+-- Rollups. Raw observations arrive at ~4,800 rows a day and the whole
+-- database round-trips through S3 on every invocation, so keeping a year of
+-- them would mean shipping hundreds of megabytes eight times a day. These two
+-- tables hold what the charts and the detector actually need, at a size that
+-- stays flat.
+
+-- One row per route per calendar day: the cheapest fare seen that day, which
+-- is what "was it a good day to buy" means. Retained long enough to draw a
+-- year of history.
+CREATE TABLE IF NOT EXISTS daily_price (
+    origin        TEXT NOT NULL,
+    destination   TEXT NOT NULL,
+    trip_kind     TEXT NOT NULL,
+    currency      TEXT NOT NULL,
+    day           TEXT NOT NULL,
+    min_price     REAL NOT NULL,
+    avg_price     REAL NOT NULL,
+    observations  INTEGER NOT NULL,
+    PRIMARY KEY (origin, destination, trip_kind, currency, day)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_route
+    ON daily_price (origin, destination, trip_kind, currency, day);
+
+-- Current state rather than history: the cheapest fare on offer for each
+-- month of departure. Rebuilt from the raw buffer every scan, so it answers
+-- "when is it cheapest to fly" with what you could book today.
+CREATE TABLE IF NOT EXISTS month_price (
+    origin        TEXT NOT NULL,
+    destination   TEXT NOT NULL,
+    trip_kind     TEXT NOT NULL,
+    currency      TEXT NOT NULL,
+    depart_month  TEXT NOT NULL,
+    min_price     REAL NOT NULL,
+    avg_price     REAL NOT NULL,
+    observations  INTEGER NOT NULL,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (origin, destination, trip_kind, currency, depart_month)
+);
 """
 
 
@@ -155,8 +194,51 @@ class Storage:
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows,
         )
+        # Rolled up on the same write path, so the aggregates can never drift
+        # out of step with the raw rows that produced them.
+        self.refresh_rollups()
         self._conn.commit()
         return len(rows)
+
+    def refresh_rollups(self) -> None:
+        """Recompute both aggregates from the raw buffer.
+
+        Recomputed rather than incremented: the buffer is small (a week), the
+        aggregate query is trivial, and an exact rebuild cannot accumulate the
+        rounding and double-count errors an incremental update would.
+        """
+        self._conn.execute(
+            """INSERT INTO daily_price
+                   (origin, destination, trip_kind, currency, day,
+                    min_price, avg_price, observations)
+               SELECT origin, destination, trip_kind, currency,
+                      substr(observed_at, 1, 10),
+                      MIN(price), AVG(price), COUNT(*)
+               FROM observations
+               GROUP BY origin, destination, trip_kind, currency,
+                        substr(observed_at, 1, 10)
+               ON CONFLICT (origin, destination, trip_kind, currency, day)
+               DO UPDATE SET min_price = excluded.min_price,
+                             avg_price = excluded.avg_price,
+                             observations = excluded.observations"""
+        )
+
+        # Fully rebuilt: a departure month that dropped out of the buffer is no
+        # longer bookable at that price, and should stop being advertised.
+        self._conn.execute("DELETE FROM month_price")
+        self._conn.execute(
+            """INSERT INTO month_price
+                   (origin, destination, trip_kind, currency, depart_month,
+                    min_price, avg_price, observations, updated_at)
+               SELECT origin, destination, trip_kind, currency,
+                      substr(depart_date, 1, 7),
+                      MIN(price), AVG(price), COUNT(*), ?
+               FROM observations
+               WHERE depart_date IS NOT NULL AND depart_date != ''
+               GROUP BY origin, destination, trip_kind, currency,
+                        substr(depart_date, 1, 7)""",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
 
     def record_alert(self, deal: Deal, url: Optional[str] = None) -> None:
         o = deal.offer
@@ -189,11 +271,28 @@ class Storage:
         )
         self._conn.commit()
 
-    def prune(self, keep_days: int) -> int:
+    def prune(self, keep_days: int, keep_rollup_days: int = 400) -> int:
+        """Drop the raw buffer past `keep_days`, the rollups past a year-plus.
+
+        Two horizons because they serve different things: raw rows only back
+        the "cheapest right now" list and deep-link enrichment, while the
+        rollup is the price history a chart draws. Keeping raw for a year is
+        what would push the database past what Lambda can move each run.
+
+        Must run after `refresh_rollups`, or a day would be deleted before it
+        was ever aggregated.
+        """
         cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
         cur = self._conn.execute("DELETE FROM observations WHERE observed_at < ?", (cutoff,))
+        removed = cur.rowcount
+
+        rollup_cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=keep_rollup_days)
+        ).strftime("%Y-%m-%d")
+        self._conn.execute("DELETE FROM daily_price WHERE day < ?", (rollup_cutoff,))
+
         self._conn.commit()
-        return cur.rowcount
+        return removed
 
     # -- reads --------------------------------------------------------------
 
@@ -205,13 +304,22 @@ class Storage:
         currency: str,
         window_days: int,
     ) -> Optional[Baseline]:
-        """Robust price summary for one route bucket, or None if no history."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        """Robust price summary for one route bucket, or None if no history.
+
+        Built from daily minima, not from every raw offer. "The cheapest fare
+        available today" is the quantity a reader compares against, so the
+        baseline has to be the typical cheapest day — mixing in the expensive
+        itineraries from the same sweep would inflate every apparent discount.
+        Reading the rollup is also what lets a year of history stay affordable.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime(
+            "%Y-%m-%d"
+        )
         rows = self._conn.execute(
-            """SELECT price, substr(observed_at, 1, 10) AS day
-               FROM observations
+            """SELECT min_price AS price, day, observations
+               FROM daily_price
                WHERE origin = ? AND destination = ? AND trip_kind = ?
-                 AND currency = ? AND observed_at >= ?""",
+                 AND currency = ? AND day >= ?""",
             (origin.upper(), destination.upper(), trip_kind, currency.lower(), cutoff),
         ).fetchall()
         if not rows:
@@ -227,8 +335,11 @@ class Storage:
             median=median,
             mad=mad,
             p10=_percentile(prices, 0.10),
-            sample_size=len(prices),
-            distinct_days=len({r["day"] for r in rows}),
+            # Raw observations behind the rollup, not the number of daily rows:
+            # the reliability gates were tuned against how much data we have
+            # seen, and one row per day would silently redefine them.
+            sample_size=sum(r["observations"] for r in rows),
+            distinct_days=len(rows),
         )
 
     def seen_fingerprint(self, fingerprint: str) -> bool:
@@ -318,6 +429,51 @@ class Storage:
                LIMIT ?""",
             (cutoff, cutoff, limit),
         ).fetchall()
+
+    def month_fares(self, limit: int = 900) -> list[sqlite3.Row]:
+        """Cheapest fare per route per month of departure.
+
+        Two jobs at once: the "when is it cheapest to fly" chart, and date
+        filtering — with one fare per route the page could only ever match a
+        single week of the year.
+        """
+        return self._conn.execute(
+            """SELECT m.*, o.depart_date, o.return_date, o.transfers,
+                      o.airline, o.seller, o.deep_link
+               FROM month_price m
+               LEFT JOIN observations o
+                 ON o.origin = m.origin AND o.destination = m.destination
+                AND o.trip_kind = m.trip_kind AND o.currency = m.currency
+                AND substr(o.depart_date, 1, 7) = m.depart_month
+                AND o.price = m.min_price
+               GROUP BY m.origin, m.destination, m.trip_kind, m.currency,
+                        m.depart_month
+               ORDER BY m.min_price ASC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+
+    def price_history(self, routes: Sequence[tuple[str, str, str]], days: int = 180):
+        """Daily minima per route, for the history chart.
+
+        Restricted to the routes actually on the page: a full year for every
+        route the radar has ever seen would dwarf the rest of the payload.
+        """
+        if not routes:
+            return {}
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        out: dict[tuple[str, str, str], list[sqlite3.Row]] = {}
+        for origin, destination, trip_kind in routes:
+            rows = self._conn.execute(
+                """SELECT day, min_price FROM daily_price
+                   WHERE origin = ? AND destination = ? AND trip_kind = ?
+                     AND day >= ?
+                   ORDER BY day""",
+                (origin, destination, trip_kind, cutoff),
+            ).fetchall()
+            if rows:
+                out[(origin, destination, trip_kind)] = rows
+        return out
 
     def recent_alerts(self, limit: int = 20) -> list[sqlite3.Row]:
         return self._conn.execute(

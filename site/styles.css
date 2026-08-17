@@ -220,3 +220,42 @@ footer a { color: var(--accent); }
   .price-block { text-align: start; }
   .stats { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------- secondary controls: dates, budget ---------- */
+
+.controls.secondary { position: static; border-block-end: none; padding-top: 0; }
+.field {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; color: var(--muted);
+}
+.field.grow { flex: 1 1 180px; min-width: 0; }
+.field input[type="date"] {
+  font: inherit; font-size: 15px; padding: 9px 10px; min-height: 44px;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink);
+}
+.field input[type="range"] { accent-color: var(--accent); min-height: 32px; }
+.field b { color: var(--ink); }
+.ghost {
+  font: inherit; font-size: 14px; padding: 10px 14px; min-height: 44px;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); cursor: pointer; align-self: flex-end;
+}
+.ghost:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- charts ---------- */
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
+}
+.panel h3 { font-size: 14px; margin: 20px 0 6px; color: var(--muted); font-weight: 600; }
+#heatmap svg, #month-chart svg, #history-chart svg { display: block; }
+#heatmap { min-width: 640px; }
+.spark { opacity: .85; }
+.fare .top .amount { display: flex; align-items: center; gap: 6px; }
+
+@media (max-width: 560px) {
+  .controls.secondary { gap: 10px; }
+  .ghost { align-self: stretch; }
+}

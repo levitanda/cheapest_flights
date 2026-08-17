@@ -54,9 +54,20 @@
   <input id="q" type="search" list="places" autocomplete="off" spellcheck="false"
          placeholder="חיפוש לפי עיר או קוד שדה תעופה…">
   <datalist id="places"></datalist>
-  <select id="tier" aria-label="tier"></select>
+  <select id="country" aria-label="country"></select>
   <select id="sort" aria-label="sort"></select>
+  <select id="tier" aria-label="tier"></select>
   <label class="toggle"><input type="checkbox" id="direct"><span id="direct-label">ללא עצירות בלבד</span></label>
+</div>
+
+<div class="controls secondary">
+  <label class="field"><span id="from-label"></span><input id="from" type="date"></label>
+  <label class="field"><span id="to-label"></span><input id="to" type="date"></label>
+  <label class="field grow">
+    <span><span id="budget-label"></span> <b id="budget-value" class="tnum"></b></span>
+    <input id="budget" type="range" min="0" max="1000" step="25" value="1000">
+  </label>
+  <button type="button" id="reset" class="ghost"></button>
 </div>
 
 <div id="deals"><div class="loading">…</div></div>
@@ -64,6 +75,20 @@
 <h2 id="current-head">הזול ביותר כרגע</h2>
 <p class="hint" id="current-hint"></p>
 <div id="current" class="grid"></div>
+
+<section id="focus" hidden>
+  <h2 id="focus-head"></h2>
+  <div class="panel">
+    <div id="month-chart"></div>
+    <h3 id="history-head"></h3>
+    <div id="history-chart"></div>
+    <p class="hint" id="history-note"></p>
+  </div>
+</section>
+
+<h2 id="heatmap-head"></h2>
+<p class="hint" id="heatmap-hint"></p>
+<div class="scroll"><div id="heatmap"></div></div>
 
 <h2 id="routes-head">מסלולים במעקב</h2>
 <div class="scroll"><table id="routes"><tbody></tbody></table></div>
@@ -76,6 +101,7 @@
 </div>
 
 <script src="i18n.js"></script>
+<script src="charts.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

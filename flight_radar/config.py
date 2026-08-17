@@ -58,6 +58,7 @@ class Settings:
     # --- storage -----------------------------------------------------------
     data_dir: Path
     keep_history_days: int
+    keep_rollup_days: int
 
     # --- detection ---------------------------------------------------------
     baseline_window_days: int
@@ -115,7 +116,11 @@ class Settings:
             # the page shows up to 80 destinations, so cover all of them.
             enrich_limit=_i("ENRICH_LIMIT", 90),
             data_dir=data_dir,
-            keep_history_days=_i("KEEP_HISTORY_DAYS", 365),
+            # Raw rows are a short buffer, not the archive. At ~4,800 a day a
+            # year of them would be hundreds of megabytes moved through S3
+            # eight times daily; the daily rollup is the archive instead.
+            keep_history_days=_i("KEEP_HISTORY_DAYS", 7),
+            keep_rollup_days=_i("KEEP_ROLLUP_DAYS", 400),
             baseline_window_days=_i("BASELINE_WINDOW_DAYS", 90),
             min_observations=_i("MIN_OBSERVATIONS", 12),
             min_distinct_days=_i("MIN_DISTINCT_DAYS", 6),

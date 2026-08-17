@@ -1,8 +1,16 @@
 """SQLite price history and alert log.
 
-Plain `sqlite3` rather than an ORM: the schema is two tables and the only
-interesting query is a windowed aggregate, so an ORM would add a dependency
-and hide the one query worth reading.
+Plain `sqlite3` rather than an ORM: the schema is four tables and the only
+interesting queries are aggregates, so an ORM would add a dependency and hide
+the queries worth reading.
+
+**The AWS Lambda runtime ships SQLite 3.7.17 — a 2013 build.** Every feature
+this project might reach for arrived later: common table expressions (3.8.3),
+UPSERT (3.24), window functions (3.25). A developer machine runs 3.45 and
+accepts all of them happily, so the failure only ever shows up in production
+as a bare "syntax error". Both times that has happened here, it cost a deploy
+cycle to diagnose. Keep the SQL boring, and see `tests/test_sql_dialect.py`,
+which greps the shipped statements for constructs the runtime cannot parse.
 """
 
 from __future__ import annotations
@@ -207,8 +215,11 @@ class Storage:
         aggregate query is trivial, and an exact rebuild cannot accumulate the
         rounding and double-count errors an incremental update would.
         """
+        # INSERT OR REPLACE rather than ON CONFLICT ... DO UPDATE: the Lambda
+        # runtime ships SQLite 3.7.17, which predates UPSERT by five years.
+        # Against the primary key it has the same effect.
         self._conn.execute(
-            """INSERT INTO daily_price
+            """INSERT OR REPLACE INTO daily_price
                    (origin, destination, trip_kind, currency, day,
                     min_price, avg_price, observations)
                SELECT origin, destination, trip_kind, currency,
@@ -216,11 +227,7 @@ class Storage:
                       MIN(price), AVG(price), COUNT(*)
                FROM observations
                GROUP BY origin, destination, trip_kind, currency,
-                        substr(observed_at, 1, 10)
-               ON CONFLICT (origin, destination, trip_kind, currency, day)
-               DO UPDATE SET min_price = excluded.min_price,
-                             avg_price = excluded.avg_price,
-                             observations = excluded.observations"""
+                        substr(observed_at, 1, 10)"""
         )
 
         # Fully rebuilt: a departure month that dropped out of the buffer is no

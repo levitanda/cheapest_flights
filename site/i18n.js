@@ -54,6 +54,9 @@ const I18N = {
     heatmapHeading: "לאן ומתי זול",
     heatmapHint: "כל תא הוא המחיר הזול ביותר ליעד בחודש הזה. ירוק = זול.",
     noDataForFilter: "אין טיסות בתאריכים האלה.",
+    datesHeading: "כל התאריכים שנמצאו ({count})",
+    noDatesFound: "אין לנו מחיר לתאריכים האלה.",
+    searchTheseDates: "לחפש בתאריכים האלה",
 
     currentHeading: "הזול ביותר כרגע",
     currentHint:
@@ -139,6 +142,9 @@ const I18N = {
     heatmapHeading: "Куда и когда дёшево",
     heatmapHint: "Каждая клетка — самая низкая цена на направление в этом месяце. Зелёный = дёшево.",
     noDataForFilter: "В эти даты рейсов не найдено.",
+    datesHeading: "Все найденные даты ({count})",
+    noDatesFound: "На эти даты цены у нас нет.",
+    searchTheseDates: "Искать на эти даты",
 
     currentHeading: "Самые дешёвые сейчас",
     currentHint:
@@ -224,6 +230,9 @@ const I18N = {
     heatmapHeading: "Where and when it is cheap",
     heatmapHint: "Each cell is the lowest fare to that destination in that month. Green = cheap.",
     noDataForFilter: "No flights within those dates.",
+    datesHeading: "All dates found ({count})",
+    noDatesFound: "We have no price for those dates.",
+    searchTheseDates: "Search these dates",
 
     currentHeading: "Cheapest right now",
     currentHint:

@@ -54,6 +54,9 @@ class Settings:
     # and Ufa — and quoted prices no Israeli buyer would be offered.
     market: str
     enrich_limit: int
+    deep_scan_destinations: int
+    deep_scan_months: int
+    deep_scan_hours: int
 
     # --- storage -----------------------------------------------------------
     data_dir: Path
@@ -115,6 +118,13 @@ class Settings:
             # One API call each, ~0.2s apiece, against a 300s timeout — and
             # the page shows up to 80 destinations, so cover all of them.
             enrich_limit=_i("ENRICH_LIMIT", 90),
+            # The calendar scan: one API call per destination per month, so it
+            # runs on its own daily clock rather than with the three-hourly
+            # sweep. 40 x 3 x once-a-day is ~120 calls, against thousands if it
+            # rode along with every sweep.
+            deep_scan_destinations=_i("DEEP_SCAN_DESTINATIONS", 40),
+            deep_scan_months=_i("DEEP_SCAN_MONTHS", 3),
+            deep_scan_hours=_i("DEEP_SCAN_HOURS", 20),
             data_dir=data_dir,
             # Raw rows are a short buffer, not the archive. At ~4,800 a day a
             # year of them would be hundreds of megabytes moved through S3

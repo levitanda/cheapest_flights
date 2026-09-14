@@ -9,6 +9,7 @@ an error fare drag the median down far enough to disqualify itself.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -29,6 +30,7 @@ class ScanReport:
     offers_seen: int = 0
     offers_stored: int = 0
     enriched: int = 0
+    deep_scanned: int = 0
     candidates: int = 0
     alerted: int = 0
     suppressed: int = 0
@@ -92,6 +94,81 @@ def collect_offers(
     return kept
 
 
+
+DEEP_SCAN_KEY = "last_deep_scan"
+
+
+def _months_ahead(count: int) -> list[str]:
+    today = date.today()
+    out, year, month = [], today.year, today.month
+    for _ in range(max(1, count)):
+        out.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    return out
+
+
+def deep_scan(
+    provider: PriceProvider,
+    storage: Storage,
+    settings: Settings,
+    origins: Sequence[str],
+    report: "ScanReport",
+) -> list[Offer]:
+    """Month-by-month calendar for the destinations people actually open.
+
+    The broad sweep returns one or two dates per route — fine for "what is
+    cheap right now", useless when those dates do not suit you. Asking for a
+    whole month at a time is what gives Athens 259 date options where
+    Amsterdam had 3.
+
+    Run on its own slower clock: one call per route per month would be
+    thousands a day at the sweep's cadence, which is not what a free API tier
+    is for.
+    """
+    elapsed = storage.hours_since(DEEP_SCAN_KEY)
+    if elapsed is not None and elapsed < settings.deep_scan_hours:
+        logger.info("deep scan skipped, last was %.1fh ago", elapsed)
+        return []
+
+    months = _months_ahead(settings.deep_scan_months)
+    collected: list[Offer] = []
+    for origin in origins:
+        for destination in storage.top_destinations(settings.deep_scan_destinations, origin):
+            for month in months:
+                try:
+                    collected.extend(
+                        provider.prices_for_dates(origin, destination, departure_at=month)
+                    )
+                except Exception as exc:
+                    logger.debug("deep scan %s->%s %s: %s", origin, destination, month, exc)
+
+    storage.stamp(DEEP_SCAN_KEY)
+    report.deep_scanned = len(collected)
+    logger.info("deep scan: %d offers over %d months", len(collected), len(months))
+    return collected
+
+
+def dedupe(offers: Sequence[Offer]) -> list[Offer]:
+    """Keep only the cheapest offer per route and date pair.
+
+    A deep scan returns hundreds of near-identical itineraries per month, and
+    every one of them would land in the raw buffer that has to move through S3
+    each run. Nothing downstream reads anything but the minimum — baselines,
+    the rollups and the page all take the cheapest — so the rest is pure
+    weight.
+    """
+    best: dict[tuple, Offer] = {}
+    for offer in offers:
+        key = (offer.origin, offer.destination, offer.trip_kind,
+               offer.currency, offer.depart_date, offer.return_date)
+        current = best.get(key)
+        if current is None or offer.price < current.price:
+            best[key] = offer
+    return list(best.values())
+
+
 def run_scan(
     settings: Settings,
     provider: PriceProvider,
@@ -107,7 +184,15 @@ def run_scan(
     all_offers: list[Offer] = []
     for entry in watchlist:
         all_offers.extend(collect_offers(provider, entry, geo, report))
+
+    origins = list(dict.fromkeys(e.origin for e in watchlist))
+    all_offers.extend(deep_scan(provider, storage, settings, origins, report))
+
+    before = len(all_offers)
+    all_offers = dedupe(all_offers)
     report.offers_seen = len(all_offers)
+    if before != len(all_offers):
+        logger.info("deduped %d offers down to %d", before, len(all_offers))
 
     # The discovery sweep returns prices without a bookable link. Resolve them
     # before anything is stored or judged, so both the page and the alerts can

@@ -298,9 +298,77 @@ function focusTarget(tokens, f) {
   return null;
 }
 
+
+/* One alternative date for a destination already in focus. Deliberately
+ * denser than a full card: the reader has chosen the city and is now
+ * scanning a list of dates, so the city name on every row is noise. */
+function dateRow(entry, origin, destination) {
+  const node = el("div", "daterow");
+  const left = el("div");
+  left.append(el("div", "when", dateRange(entry.depart_date, entry.return_date)));
+
+  const bits = [];
+  if (entry.transfers === 0) bits.push(T.direct);
+  else if (entry.transfers > 0) bits.push(T.stops + " " + entry.transfers);
+  if (entry.airline) bits.push(entry.airline);
+  if (entry.seller) bits.push(T.seller + " " + entry.seller);
+  if (bits.length) left.append(el("div", "sub", bits.join(" · ")));
+
+  const right = el("div", "daterow-buy");
+  right.append(el("span", "amount tnum", money(entry.price, entry.currency)));
+  if (entry.url) {
+    const a = el("a", "btn-buy small", entry.exact ? T.buyExact : T.buy);
+    a.href = entry.url;
+    a.target = "_blank";
+    a.rel = "noopener nofollow";
+    right.append(a);
+  }
+  node.append(left, right);
+  return node;
+}
+
+/** Aviasales search for an exact route and date pair. The long tail of
+ *  destinations and dates can never be fully collected, so a reader who picks
+ *  dates we have no price for still gets somewhere to go. */
+function datedSearchUrl(origin, destination, from, to) {
+  const dm = (iso) => iso ? iso.slice(8, 10) + iso.slice(5, 7) : "";
+  return "https://www.aviasales.com/search/"
+    + origin + dm(from) + destination + dm(to) + "1";
+}
+
+function renderDates(target, f) {
+  const box = document.getElementById("dates");
+  const head = document.getElementById("dates-head");
+  if (!target || target.kind !== "place") { box.replaceChildren(); head.hidden = true; return; }
+
+  const origin = (PAYLOAD.current || [])[0]?.origin || "TLV";
+  let rows = ((PAYLOAD.dates || {})[`${origin}-${target.code}`] || [])
+    .filter((entry) => withinDates(entry, f.from, f.to))
+    .filter((entry) => !(f.budget < BUDGET_MAX && entry.price > f.budget))
+    .filter((entry) => !(f.directOnly && entry.transfers !== 0))
+    .sort((a, b) => a.depart_date.localeCompare(b.depart_date));
+
+  head.hidden = false;
+  head.textContent = T.datesHeading.replace("{count}", rows.length);
+
+  if (!rows.length) {
+    const empty = el("div", "empty");
+    empty.append(el("div", null, T.noDatesFound));
+    const a = el("a", "btn-buy", T.searchTheseDates);
+    a.href = datedSearchUrl(origin, target.code, f.from, f.to);
+    a.target = "_blank";
+    a.rel = "noopener nofollow";
+    empty.append(a);
+    box.replaceChildren(empty);
+    return;
+  }
+  box.replaceChildren(...rows.map((entry) => dateRow(entry, origin, target.code)));
+}
+
 function renderFocus(tokens, f) {
   const section = document.getElementById("focus");
   const target = focusTarget(tokens, f);
+  renderDates(target, f);
   if (!target) { section.hidden = true; return; }
 
   const relevant = (PAYLOAD.fares || []).filter((x) =>

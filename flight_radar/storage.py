@@ -109,6 +109,32 @@ CREATE TABLE IF NOT EXISTS month_price (
     updated_at    TEXT NOT NULL,
     PRIMARY KEY (origin, destination, trip_kind, currency, depart_month)
 );
+
+-- One row per route per departure date: the calendar a reader needs when the
+-- single cheapest date does not suit them. Only routes that get the deep scan
+-- fill this densely; the broad sweep contributes the one or two dates it
+-- happens to see.
+CREATE TABLE IF NOT EXISTS date_price (
+    origin        TEXT NOT NULL,
+    destination   TEXT NOT NULL,
+    trip_kind     TEXT NOT NULL,
+    currency      TEXT NOT NULL,
+    depart_date   TEXT NOT NULL,
+    return_date   TEXT,
+    min_price     REAL NOT NULL,
+    transfers     INTEGER,
+    airline       TEXT,
+    seller        TEXT,
+    deep_link     TEXT,
+    PRIMARY KEY (origin, destination, trip_kind, currency, depart_date)
+);
+CREATE INDEX IF NOT EXISTS idx_date_route
+    ON date_price (origin, destination, depart_date);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -245,6 +271,32 @@ class Storage:
                GROUP BY origin, destination, trip_kind, currency,
                         substr(depart_date, 1, 7)""",
             (datetime.now(timezone.utc).isoformat(),),
+        )
+
+        # Same rebuild-from-buffer treatment: a date that stopped being on
+        # offer should stop being shown, and the buffer is the only thing that
+        # knows what is still bookable.
+        self._conn.execute("DELETE FROM date_price")
+        self._conn.execute(
+            """INSERT OR REPLACE INTO date_price
+                   (origin, destination, trip_kind, currency, depart_date,
+                    return_date, min_price, transfers, airline, seller, deep_link)
+               SELECT o.origin, o.destination, o.trip_kind, o.currency,
+                      o.depart_date, o.return_date, o.price, o.transfers,
+                      o.airline, o.seller, o.deep_link
+               FROM observations o
+               JOIN (
+                   SELECT origin, destination, trip_kind, currency, depart_date,
+                          MIN(price) AS best
+                   FROM observations
+                   WHERE depart_date IS NOT NULL AND depart_date != ''
+                   GROUP BY origin, destination, trip_kind, currency, depart_date
+               ) m
+                 ON o.origin = m.origin AND o.destination = m.destination
+                AND o.trip_kind = m.trip_kind AND o.currency = m.currency
+                AND o.depart_date = m.depart_date AND o.price = m.best
+               GROUP BY o.origin, o.destination, o.trip_kind, o.currency,
+                        o.depart_date"""
         )
 
     def record_alert(self, deal: Deal, url: Optional[str] = None) -> None:
@@ -481,6 +533,62 @@ class Storage:
             if rows:
                 out[(origin, destination, trip_kind)] = rows
         return out
+
+    def date_fares(self, limit: int = 4000) -> list[sqlite3.Row]:
+        """Every departure date we hold a price for, ordered per route.
+
+        This is what turns "here is the one cheapest Amsterdam fare" into a
+        list the reader can pick a workable date from.
+        """
+        return self._conn.execute(
+            """SELECT * FROM date_price
+               WHERE depart_date >= ?
+               ORDER BY destination, depart_date
+               LIMIT ?""",
+            (datetime.now(timezone.utc).strftime("%Y-%m-%d"), limit),
+        ).fetchall()
+
+    def top_destinations(self, limit: int = 40, origin: str = "TLV") -> list[str]:
+        """The destinations worth a deep calendar scan.
+
+        Ranked by how cheap they are rather than by how often we have seen
+        them: a cheap destination is the one a reader opens and then wants
+        alternative dates for.
+        """
+        rows = self._conn.execute(
+            """SELECT destination, MIN(min_price) AS best
+               FROM month_price
+               WHERE origin = ?
+               GROUP BY destination
+               ORDER BY best ASC
+               LIMIT ?""",
+            (origin.upper(), limit),
+        ).fetchall()
+        return [r["destination"] for r in rows]
+
+    # -- meta -----------------------------------------------------------------
+
+    def get_meta(self, key: str) -> Optional[str]:
+        row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def stamp(self, key: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            (key, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+
+    def hours_since(self, key: str) -> Optional[float]:
+        """Hours since `key` was last stamped, or None if it never was."""
+        raw = self.get_meta(key)
+        if not raw:
+            return None
+        try:
+            when = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return (datetime.now(timezone.utc) - when).total_seconds() / 3600
 
     def recent_alerts(self, limit: int = 20) -> list[sqlite3.Row]:
         return self._conn.execute(

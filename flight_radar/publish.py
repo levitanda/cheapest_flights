@@ -27,7 +27,7 @@ from .storage import Storage
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _clean(value: Any) -> Any:
@@ -164,6 +164,26 @@ def build_payload(
             }
         )
 
+    # Every departure date we hold a price for, grouped by destination. This
+    # is what lets a reader whose dates do not match the headline fare pick a
+    # different one instead of leaving.
+    dates: dict[str, list] = {}
+    for row in storage.date_fares():
+        depart, ret = _as_date(row["depart_date"]), _as_date(row["return_date"])
+        entry = {
+            "depart_date": row["depart_date"],
+            "return_date": _clean(row["return_date"]),
+            "price": row["min_price"],
+            "currency": row["currency"],
+            "transfers": row["transfers"],
+            "airline": _clean(row["airline"]),
+            "seller": _clean(row["seller"]),
+            "url": booking_url(row["origin"], row["destination"], depart, ret,
+                               row["deep_link"], marker),
+            "exact": bool(row["deep_link"]),
+        }
+        dates.setdefault(f"{row['origin']}-{row['destination']}", []).append(entry)
+
     # Series only for the routes on the page. Stored as a start date plus a
     # dense array rather than dated objects — same information, a fraction of
     # the bytes once this spans months.
@@ -212,6 +232,7 @@ def build_payload(
         "deals": deals,
         "current": current,
         "fares": fares,
+        "dates": dates,
         "history": history,
         "routes": routes,
     }

@@ -122,7 +122,7 @@ class Settings:
             # runs on its own daily clock rather than with the three-hourly
             # sweep. 40 x 3 x once-a-day is ~120 calls, against thousands if it
             # rode along with every sweep.
-            deep_scan_destinations=_i("DEEP_SCAN_DESTINATIONS", 40),
+            deep_scan_destinations=_i("DEEP_SCAN_DESTINATIONS", 80),
             deep_scan_months=_i("DEEP_SCAN_MONTHS", 3),
             deep_scan_hours=_i("DEEP_SCAN_HOURS", 20),
             data_dir=data_dir,

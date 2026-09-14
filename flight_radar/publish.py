@@ -146,7 +146,8 @@ def build_payload(
             {
                 "origin": origin,
                 "destination": destination,
-                "names": _names(geo, destination),
+                # No names here: `places` already carries them, and repeating
+                # three languages once per month per route was pure weight.
                 "country": geo.country(destination) if geo else "",
                 "month": row["depart_month"],
                 "price": row["min_price"],
@@ -178,8 +179,12 @@ def build_payload(
             "transfers": row["transfers"],
             "airline": _clean(row["airline"]),
             "seller": _clean(row["seller"]),
-            "url": booking_url(row["origin"], row["destination"], depart, ret,
-                               row["deep_link"], marker),
+            # Only the exact deep link travels. The generic search URL is
+            # derivable from the route and dates, and 2,800 copies of it were
+            # most of a 1.2 MB section.
+            "url": (booking_url(row["origin"], row["destination"], depart, ret,
+                                row["deep_link"], marker)
+                    if row["deep_link"] else None),
             "exact": bool(row["deep_link"]),
         }
         dates.setdefault(f"{row['origin']}-{row['destination']}", []).append(entry)
@@ -246,7 +251,23 @@ class S3Publisher:
         self.key = key
         self.cache_seconds = cache_seconds
 
+    @property
+    def dates_key(self) -> str:
+        """Sibling of the main file: data/deals.json -> data/dates.json."""
+        head, _, _tail = self.key.rpartition("/")
+        return f"{head}/dates.json" if head else "dates.json"
+
     def publish(self, payload: dict) -> bool:
+        # The calendar is by far the largest section and only matters once
+        # someone opens a destination, so it ships separately and the page
+        # fetches it on demand.
+        dates = payload.pop("dates", None)
+        ok = self._put(self.key, payload)
+        if dates is not None:
+            ok = self._put(self.dates_key, dates) and ok
+        return ok
+
+    def _put(self, key: str, payload) -> bool:
         try:
             import boto3
         except ImportError:
@@ -257,7 +278,7 @@ class S3Publisher:
         try:
             boto3.client("s3").put_object(
                 Bucket=self.bucket,
-                Key=self.key,
+                Key=key,
                 Body=body,
                 ContentType="application/json; charset=utf-8",
                 # Short TTL: the page should show a fare found twenty minutes
@@ -268,7 +289,7 @@ class S3Publisher:
             logger.warning("site publish failed: %s", exc)
             return False
 
-        logger.info("published %d bytes to s3://%s/%s", len(body), self.bucket, self.key)
+        logger.info("published %d bytes to s3://%s/%s", len(body), self.bucket, key)
         return True
 
 

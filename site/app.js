@@ -6,6 +6,7 @@
  */
 
 const DATA_URL = "data/deals.json";
+const DATES_URL = "data/dates.json";
 const SYMBOL = { usd: "$", eur: "€", ils: "₪", gbp: "£", rub: "₽" };
 
 const BUDGET_MAX = 1000;
@@ -13,6 +14,10 @@ const BUDGET_MAX = 1000;
 let LANG = pickLang();
 let T = I18N[LANG];
 let PAYLOAD = null;
+// Fetched the first time a reader opens a destination: the calendar is a
+// megabyte, and most visits never need it.
+let DATES = null;
+let datesPending = false;
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -49,7 +54,13 @@ const ago = (iso) => {
   return rtf.format(-Math.floor(mins / 1440), "day");
 };
 
-const nameOf = (item) => (item.names && (item.names[LANG] || item.names.en)) || item.destination;
+const nameOf = (item) => {
+  // `fares` no longer carries names — they live once in `places`.
+  const own = item.names && (item.names[LANG] || item.names.en);
+  if (own) return own;
+  const shared = (PAYLOAD && PAYLOAD.places || {})[item.destination];
+  return (shared && (shared[LANG] || shared.en)) || item.destination;
+};
 
 const tierLabel = (tier) => ({
   good: T.tierGood, great: T.tierGreat,
@@ -60,6 +71,10 @@ const tierLabel = (tier) => ({
 
 function buyRow(item, exact) {
   const row = el("div", "buy-row");
+  if (!item.url && item.destination && item.depart_date) {
+    item = { ...item, url: datedSearchUrl(item.origin || "TLV", item.destination,
+                                          item.depart_date, item.return_date) };
+  }
   if (item.url) {
     const a = el("a", "btn-buy", exact ? T.buyExact : T.buy);
     a.href = item.url;
@@ -316,9 +331,11 @@ function dateRow(entry, origin, destination) {
 
   const right = el("div", "daterow-buy");
   right.append(el("span", "amount tnum", money(entry.price, entry.currency)));
-  if (entry.url) {
+  const href = entry.url
+    || datedSearchUrl(origin, destination, entry.depart_date, entry.return_date);
+  if (href) {
     const a = el("a", "btn-buy small", entry.exact ? T.buyExact : T.buy);
-    a.href = entry.url;
+    a.href = href;
     a.target = "_blank";
     a.rel = "noopener nofollow";
     right.append(a);
@@ -336,13 +353,30 @@ function datedSearchUrl(origin, destination, from, to) {
     + origin + dm(from) + destination + dm(to) + "1";
 }
 
+function ensureDates() {
+  if (DATES || datesPending) return;
+  datesPending = true;
+  fetch(DATES_URL, { cache: "no-cache" })
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((d) => { DATES = d; apply(); })
+    .catch(() => { DATES = {}; });
+}
+
 function renderDates(target, f) {
   const box = document.getElementById("dates");
   const head = document.getElementById("dates-head");
   if (!target || target.kind !== "place") { box.replaceChildren(); head.hidden = true; return; }
 
+  ensureDates();
+  if (!DATES) {
+    head.hidden = false;
+    head.textContent = T.loading;
+    box.replaceChildren(el("div", "loading", T.loading));
+    return;
+  }
+
   const origin = (PAYLOAD.current || [])[0]?.origin || "TLV";
-  let rows = ((PAYLOAD.dates || {})[`${origin}-${target.code}`] || [])
+  let rows = ((DATES || {})[`${origin}-${target.code}`] || [])
     .filter((entry) => withinDates(entry, f.from, f.to))
     .filter((entry) => !(f.budget < BUDGET_MAX && entry.price > f.budget))
     .filter((entry) => !(f.directOnly && entry.transfers !== 0))

@@ -98,6 +98,21 @@ def collect_offers(
 DEEP_SCAN_KEY = "last_deep_scan"
 
 
+def _curated_destinations() -> set[str]:
+    """The hand-picked destination list, reused as a relevance signal.
+
+    It was written for Hebrew names, but it is also the best answer we have
+    to "where do Israelis actually fly" — which is not the same question as
+    "what is cheapest this week".
+    """
+    from .geo import _load_overrides
+
+    codes: set[str] = set()
+    for mapping in _load_overrides().values():
+        codes.update(mapping)
+    return codes
+
+
 def _months_ahead(count: int) -> list[str]:
     today = date.today()
     out, year, month = [], today.year, today.month
@@ -135,7 +150,10 @@ def deep_scan(
     months = _months_ahead(settings.deep_scan_months)
     collected: list[Offer] = []
     for origin in origins:
-        for destination in storage.top_destinations(settings.deep_scan_destinations, origin):
+        preferred = _curated_destinations()
+        for destination in storage.top_destinations(
+            settings.deep_scan_destinations, origin, preferred
+        ):
             for month in months:
                 try:
                     collected.extend(

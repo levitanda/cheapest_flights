@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
 from flight_radar.models import Deal
 from flight_radar.publish import S3Publisher, build_payload, publisher_from
@@ -98,11 +99,11 @@ class TestPublisher:
     def test_successful_upload_sends_json_with_a_short_cache_ttl(
         self, monkeypatch, storage, geo
     ):
-        captured = {}
+        writes = []
 
         class FakeS3:
             def put_object(self, **kw):
-                captured.update(kw)
+                writes.append(kw)
 
         class FakeBoto:
             def client(self, name):
@@ -113,7 +114,42 @@ class TestPublisher:
         storage.record_alert(deal(), url="https://example.test")
 
         assert S3Publisher("bucket", "data/deals.json").publish(build_payload(storage, geo))
-        assert captured["Bucket"] == "bucket"
-        assert captured["Key"] == "data/deals.json"
-        assert "max-age=120" in captured["CacheControl"]
-        assert json.loads(captured["Body"])["deals"][0]["price"] == 95.0
+
+        main = writes[0]
+        assert main["Bucket"] == "bucket"
+        assert main["Key"] == "data/deals.json"
+        assert "max-age=120" in main["CacheControl"]
+        assert json.loads(main["Body"])["deals"][0]["price"] == 95.0
+
+    def test_the_date_calendar_ships_as_its_own_object(self, monkeypatch, storage, geo):
+        """A megabyte that only matters once a reader opens a destination must
+        not be part of every visit."""
+        writes = []
+
+        class FakeS3:
+            def put_object(self, **kw):
+                writes.append(kw)
+
+        class FakeBoto:
+            def client(self, name):
+                return FakeS3()
+
+        monkeypatch.setitem(__import__("sys").modules, "boto3", FakeBoto())
+        # A future departure: the calendar deliberately drops dates that have
+        # already passed.
+        soon = date.today() + timedelta(days=30)
+        storage.record_offers([
+            make_offer(price=120, depart=soon, ret=soon + timedelta(days=7))
+        ])
+
+        publisher = S3Publisher("bucket", "data/deals.json")
+        assert publisher.publish(build_payload(storage, geo))
+
+        keys = [w["Key"] for w in writes]
+        assert keys == ["data/deals.json", "data/dates.json"]
+        assert "dates" not in json.loads(writes[0]["Body"])
+        assert json.loads(writes[1]["Body"])
+
+    def test_dates_key_sits_next_to_the_main_file(self):
+        assert S3Publisher("b", "data/deals.json").dates_key == "data/dates.json"
+        assert S3Publisher("b", "deals.json").dates_key == "dates.json"

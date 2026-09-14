@@ -548,23 +548,33 @@ class Storage:
             (datetime.now(timezone.utc).strftime("%Y-%m-%d"), limit),
         ).fetchall()
 
-    def top_destinations(self, limit: int = 40, origin: str = "TLV") -> list[str]:
+    def top_destinations(
+        self,
+        limit: int = 40,
+        origin: str = "TLV",
+        preferred: Optional[Iterable[str]] = None,
+    ) -> list[str]:
         """The destinations worth a deep calendar scan.
 
-        Ranked by how cheap they are rather than by how often we have seen
-        them: a cheap destination is the one a reader opens and then wants
-        alternative dates for.
+        Cheapness alone is the wrong ranking: Amsterdam is a place Israelis
+        actually fly to and was nowhere near the forty cheapest, so it kept
+        the three dates the broad sweep happened to catch. `preferred` — the
+        curated destination list — goes first, then the cheapest of the rest
+        fills the budget.
         """
         rows = self._conn.execute(
             """SELECT destination, MIN(min_price) AS best
                FROM month_price
                WHERE origin = ?
                GROUP BY destination
-               ORDER BY best ASC
-               LIMIT ?""",
-            (origin.upper(), limit),
+               ORDER BY best ASC""",
+            (origin.upper(),),
         ).fetchall()
-        return [r["destination"] for r in rows]
+
+        wanted = {c.upper() for c in (preferred or ())}
+        ranked = [r["destination"] for r in rows if r["destination"] in wanted]
+        ranked += [r["destination"] for r in rows if r["destination"] not in wanted]
+        return ranked[:limit]
 
     # -- meta -----------------------------------------------------------------
 
